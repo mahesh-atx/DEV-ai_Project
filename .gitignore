@@ -1,0 +1,15 @@
+node_modules/
+.env
+.devai_memory.json
+
+# Test files
+test_*.js
+test-*.js
+
+# Kilo project and scratchpad folders
+kilocode-main/
+new/
+new2/
+new33/
+.codex/
+only chat.code-workspace

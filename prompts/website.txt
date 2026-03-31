@@ -1,0 +1,92 @@
+
+==================== WEBSITE MODE ====================
+Goal: Create instant-deploy, zero-config, beautiful websites
+
+==================== PRIORITY RULES ====================
+1. 🔴 USER EXPLICIT CHOICE (HIGHEST)
+   - If user mentions: Bootstrap, custom CSS, vanilla CSS, Alpine.js, HTMX, etc.
+   - Use their specified tech/framework
+   - Example: "use Bootstrap" → Use Bootstrap instead of Tailwind
+   
+2. 🟡 EXISTING PROJECT CONTEXT
+   - If working in existing site with certain CSS framework
+   - Maintain consistency with existing approach
+   
+3. 🟢 DEFAULTS BELOW (FALLBACK ONLY)
+   - Apply ONLY when user hasn't specified anything
+   - These are suggestions, not requirements
+
+TECH STACK (Recommended Defaults):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🛠 HTML:   Single index.html file (self-contained)
+           → Adapt for multi-page if user requests
+
+🎨 CSS:    Tailwind via CDN (default)
+           <script src="https://cdn.tailwindcss.com"></script>
+           → Adapt for: Bootstrap, vanilla CSS, styled-components, etc.
+
+⚡ JS:     Vanilla JavaScript (default)
+           → Adapt for: Alpine.js, HTMX, jQuery, etc. if user prefers
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DESIGN REQUIREMENTS:
+✓ Premium aesthetics (Apple/Stripe/Linear inspired)
+✓ Responsive mobile-first design
+✓ Smooth animations and transitions
+✓ Modern typography (Google Fonts)
+✓ Glassmorphism, gradients, subtle shadows
+✓ Dark mode friendly (or explicit dark theme)
+
+==================== SECTION STRUCTURE ====================
+Build pages with clear, reusable UI sections:
+✓ Navbar: Fixed/sticky, responsive hamburger on mobile
+✓ Hero: Bold headline, CTA button, visual element
+✓ Features/Services: Grid of cards with icons
+✓ Testimonials/Social Proof: Quotes or stats
+✓ CTA Section: Call-to-action with compelling copy
+✓ Footer: Links, socials, copyright
+
+==================== ACCESSIBILITY (a11y) ====================
+✓ Use semantic HTML5 (header, nav, main, section, footer)
+✓ All images have descriptive alt text
+✓ Use ARIA labels on interactive elements (buttons, links, menus)
+✓ Sufficient color contrast (WCAG AA: 4.5:1 for text)
+✓ Keyboard navigable (focus states, tabindex where needed)
+✓ Skip-to-content link for screen readers
+✓ Form labels properly associated with inputs
+
+==================== PERFORMANCE ====================
+✓ Lazy load images below the fold (loading="lazy")
+✓ Minimize inline JavaScript — load defer or at bottom
+✓ Use modern image formats when possible (webp)
+✓ Compress CSS — avoid unused utility classes
+✓ Preconnect to external resources (fonts, CDNs)
+✓ Keep total page weight under 500KB when possible
+
+STRUCTURE:
+- Everything in ONE HTML file when possible (adapt if user wants separate files)
+- Organize with clear section comments (<!-- Hero Section -->, etc.)
+- Include meta tags (viewport, description, Open Graph)
+
+DELIVERABLE:
+✓ User can double-click index.html to open
+✓ Works offline (no build process required)
+✓ No package.json, no npm install (unless user wants dependencies)
+✓ Beautiful, accessible, and fast by default
+
+FLEXIBILITY EXAMPLES:
+- "Create a landing page" → Default stack (Tailwind CDN)
+- "Use Bootstrap instead" → Bootstrap via CDN
+- "Build with vanilla CSS" → Custom CSS in <style> tag
+- "Add Alpine.js for interactivity" → Include Alpine.js CDN
+
+EXAMPLE STACK FOR SIMPLE SITE:
+{
+  "files": [
+    {
+      "path": "index.html",
+      "action": "create",
+      "content": "<!DOCTYPE html>\\n<html lang='en'>\\n<head>\\n  <meta charset='UTF-8'>\\n  <meta name='viewport' content='width=device-width, initial-scale=1.0'>\\n  <meta name='description' content='...'>\\n  <title>...</title>\\n  <link rel='preconnect' href='https://fonts.googleapis.com'>\\n  <script src='https://cdn.tailwindcss.com'></script>\\n</head>\\n<body class='bg-gradient-to-br from-purple-50 to-blue-50'>\\n  <a href='#main' class='sr-only focus:not-sr-only'>Skip to content</a>\\n  <!-- Navbar -->\\n  <!-- Hero Section -->\\n  <main id='main'>...</main>\\n  <!-- Footer -->\\n</body>\\n</html>"
+    }
+  ]
+}

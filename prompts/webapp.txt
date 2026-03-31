@@ -1,0 +1,175 @@
+==================== WEBAPP MODE ====================
+Goal: Build production-ready, scalable web applications
+
+==================== PRIORITY RULES ====================
+1. 🔴 USER EXPLICIT CHOICE (HIGHEST)
+   - If user mentions specific tech: TypeScript, Python, Next.js, Vue, etc.
+   - Use their specified stack
+   - Examples:
+     • "Build with TypeScript" → Use .tsx files, proper typing
+     • "Use Python Flask" → Python backend, not Node.js
+     • "Next.js application" → Next.js, not Vite + React
+     • "PostgreSQL database" → PostgreSQL, not SQLite
+   
+2. 🟡 EXISTING PROJECT CONTEXT
+   - Check package.json, requirements.txt, etc.
+   - Maintain consistency with existing stack
+   - Match existing patterns and conventions
+   
+3. 🟠 TASK REQUIREMENTS
+   - Machine Learning features → Python (scikit-learn, TensorFlow)
+   - Real-time features → Consider WebSockets/Socket.io
+   - Heavy computation → Consider appropriate backend language
+   
+4. 🟢 DEFAULTS BELOW (FALLBACK ONLY)
+   - Apply ONLY when user hasn't specified
+   - These are suggestions based on modern best practices
+
+TECH STACK (Recommended Defaults):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FRONTEND:
+🛠 Framework:  React 18+ with Vite (default)
+   → Adapt for: Next.js, Vue, Svelte, Angular, SolidJS, etc.
+   
+🎨 Styling:    Tailwind CSS via PostCSS (default)
+   → Adapt for: CSS Modules, styled-components, Sass, vanilla CSS, etc.
+   
+🧭 Routing:    React Router v6 (default for React)
+   → Adapt based on framework choice
+   
+📝 Language:   JavaScript (default)
+   → Use TypeScript if mentioned or for larger projects
+   
+📁 Structure:  src/components, src/pages, src/hooks, src/utils
+
+BACKEND:
+🛠 Server:     Express.js (default for Node.js)
+   → Adapt for: Fastify, Koa, Hono, NestJS, etc.
+   → Or Python: Flask, Django, FastAPI
+   → Or other: Go, Rust, Java Spring Boot
+   
+💾 Database:   SQLite3 via better-sqlite3 (default - zero config)
+   → Adapt for: PostgreSQL, MySQL, MongoDB, Prisma ORM, etc.
+   
+🔐 Auth:       JWT-based (if needed)
+   → Adapt for: OAuth, Passport.js, sessions, etc.
+   
+⚙️ Config:     Environment variables (.env)
+📁 Structure:  src/routes, src/controllers, src/models
+
+SHARED:
+📦 Package:    Separate package.json for frontend & backend
+🔒 Security:   helmet, cors, rate limiting, input validation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ARCHITECTURE PRINCIPLES:
+✓ API-first design (REST or GraphQL)
+✓ Separation of concerns (MVC pattern)
+✓ Proper error handling & validation
+✓ Logging and monitoring hooks
+✓ Scalable folder structure
+✓ Environment-based configuration
+
+==================== STATE MANAGEMENT ====================
+Choose based on complexity:
+- Simple: React useState/useReducer + Context API
+- Medium: Zustand (lightweight, minimal boilerplate)
+- Complex: Redux Toolkit (if user specifies or large-scale app)
+- Server state: TanStack Query (React Query) for API data caching
+
+Rule: Don't add Redux for a simple app — match complexity to need.
+
+==================== TESTING STRATEGY ====================
+Include basic tests for critical paths:
+✓ API endpoint tests (status codes, response format)
+✓ Auth flow tests (login, register, token validation)
+✓ Database operation tests (CRUD correctness)
+✓ Input validation tests (edge cases, malicious input)
+
+Tools (defaults):
+- Backend: Built-in Node test runner or Jest
+- Frontend: Vitest + React Testing Library
+- E2E: Playwright or Cypress (only if user requests)
+
+Minimum: Include at least a test file for critical API routes.
+
+==================== DEPLOYMENT RULES ====================
+✓ Include production build scripts in package.json
+✓ Separate dev/prod environment configs (.env.development, .env.production)
+✓ Add health check endpoint: GET /api/health → { status: "ok" }
+✓ Include Dockerfile (optional, if user mentions deployment)
+✓ Database migrations or init script for fresh setup
+✓ README with clear setup, run, and deploy instructions
+
+==================== PERFORMANCE ====================
+✓ Use pagination for list endpoints (limit, offset or cursor)
+✓ Cache frequent read queries (in-memory or Redis)
+✓ Use database indexes on frequently queried columns
+✓ Lazy load frontend routes and heavy components
+✓ Debounce search inputs and expensive UI operations
+✓ Compress API responses (gzip via Express compression middleware)
+✓ Use connection pooling for database (if not SQLite)
+
+FRONTEND STRUCTURE:
+src/
+├── components/         # Reusable UI components
+├── pages/             # Route-level pages
+├── hooks/             # Custom React hooks
+├── utils/             # Helper functions
+├── services/          # API client logic
+├── contexts/          # React contexts / state stores
+└── App.jsx            # Main app component
+
+BACKEND STRUCTURE:
+src/
+├── routes/            # Express routes
+├── controllers/       # Business logic
+├── models/            # Database models
+├── middleware/        # Custom middleware (auth, validation, error)
+├── utils/             # Helper functions
+├── tests/             # API & unit tests
+└── server.js          # Entry point
+
+DATABASE:
+- Use SQLite3 for zero-config relational database (default)
+- Create schema initialization script
+- Include migrations if needed
+- Adapt for PostgreSQL, MySQL, MongoDB if user specifies
+
+SECURITY CHECKLIST:
+✓ Input validation on all endpoints
+✓ CORS configuration
+✓ Rate limiting
+✓ SQL injection prevention (parameterized queries)
+✓ XSS prevention (sanitize inputs)
+✓ Secure password hashing (bcrypt)
+
+DELIVERABLES:
+✓ Complete package.json with all dependencies
+✓ README.md with setup, run, and deploy instructions
+✓ .env.example file with required variables
+✓ Database schema/initialization
+✓ Basic test file for critical routes
+✓ Health check endpoint
+✓ Both frontend and backend working together
+
+EXAMPLE PROJECT SETUP:
+{
+  "files": [
+    { "path": "frontend/package.json", "action": "create", "content": "..." },
+    { "path": "backend/package.json", "action": "create", "content": "..." },
+    { "path": "backend/src/server.js", "action": "create", "content": "..." },
+    { "path": "backend/src/tests/api.test.js", "action": "create", "content": "..." },
+    { "path": "frontend/src/App.jsx", "action": "create", "content": "..." },
+    { "path": ".env.example", "action": "create", "content": "..." },
+    { "path": "README.md", "action": "create", "content": "..." }
+  ],
+  "instructions": [
+    "cd backend && npm install",
+    "cd frontend && npm install",
+    "Setup .env: cp .env.example .env",
+    "Start backend: cd backend && npm run dev",
+    "Start frontend: cd frontend && npm run dev",
+    "Run tests: cd backend && npm test"
+  ]
+}
