@@ -1,59 +1,80 @@
-# Adv_Devai_CLI
+# DevAI CLI 🚀
 
-**DevAI** — An autonomous CLI-based AI software engineer that understands your codebase, plans changes, writes code, and auto-fixes errors.
+**DevAI** is an elite, autonomous CLI-based AI software engineer. It doesn't just autocomplete code—it natively understands your workspace, plans architectures, spins up parallel background agents, writes files, and acts as its own QA engineer to auto-fix errors.
 
-## Features
+## 🌟 Core Features
 
-- **Smart Context Selection** — Automatically reads and prioritizes relevant project files
-- **Multi-Model Support** — Works with multiple AI models via configurable API clients
-- **Conversation Memory** — Remembers context across multi-turn interactions
-- **Image Analysis** — Supports multimodal inputs for UI/screenshot analysis
-- **Surgical Patching** — Applies search/replace edits instead of overwriting entire files
-- **Self-Debugger Loop** — Automatically runs build/test, captures errors, and fixes them autonomously
-- **Project Detection** — Auto-detects React, Express, Node, Python, and static web projects
+### 1. Kilo Orchestrator Mode
+DevAI features an advanced multi-agent orchestration pattern inspired by the latest agentic frameworks. 
+When asked to perform a complex, multi-stage objective:
+- **Understand**: Spawns an "Explorer" agent to read the codebase.
+- **Plan**: Breaks the request down into a strict dependency array.
+- **Execute**: Launches isolated, specialized "Coder" agents in parallel waves to tackle non-overlapping files completely simultaneously.
+- **Synthesize**: Evaluates the returning code diffs and summarizes the objective.
 
-## Quick Start
+### 2. Deep Web Research
+Instead of relying on outdated training data, DevAI accesses the live internet:
+- **`websearch`**: Uses the Exa AI MCP to intelligently crawl for up-to-date documentation and API specifications.
+- **`webfetch`**: Pulls raw HTML from URLs and natively parses the DOM into LLM-optimized Markdown (supporting payloads up to 5MB).
+
+### 3. Smart Context Management
+Never run out of tokens. DevAI explicitly calculates context windows, compacts old conversation history, and utilizes `list_files` and `search_content` to only parse exactly what it needs instead of blindly uploading your entire repository.
+
+### 4. Interactive Plan Mode (`/plan`)
+Not ready to write code? DevAI can act as a Lead Architect. It will natively explore your workspace, generate a `.kilo/plans/` markdown blueprint, and iteratively debate technical decisions with you before handing off the final approved plan to the implementation agents.
+
+### 5. The Self-Debugger (`/build`)
+DevAI tests its own work. If you run the `/build` command, DevAI executes your local test script (e.g., `npm run test`). If it crashes, DevAI parses the console traceback, infers missing NPM dependencies if needed, and modifies the source code autonomously until the build passes.
+
+### 6. The Polish Agent (`/polish`)
+Done implementing a feature? Launch the autonomous Polish agent to sweep through your workspace. It strictly focuses on improving UI/UX margins, refactoring messy functions, and unifying design tokens without altering core logic.
+
+### 7. Multi-Model Support
+DevAI isn't locked to one provider. It natively swaps between configurations for:
+- **NVIDIA API** (Powered by top models including **NVIDIA Nemotron-120B**, **Qwen3-Coder-480B**, **Moonshot Kimi-k2.5**, and **GLM-5**)
+- DeepSeek
+- Groq / Llama 3
+- GPT-OSS / Open-Weights models
+
+### 8. Surgical Patching
+Instead of overwriting 500-line files to add a single comment, DevAI uses native AST-like Diff patching to explicitly search-and-replace only the specific lines that changed, drastically reducing execution time.
+
+### 9. Git Rollback (Safety Guard) 🛡️
+DevAI takes a true `git` snapshot of your code before *every single edit*. It displays exactly what was modified and asks you: "Keep changes? (y/undo)". If you type `undo`, the AI's changes are instantly wiped out and your code is restored.
+
+---
+
+## 🌍 Installation
+
+You can install DevAI globally to use the CLI in any project directory on your machine.
 
 ```bash
-npm install
-node devai.js
+npm install -g devai-cli-coder
 ```
 
-## Commands
+*(Note: Requires Node.js v18 or newer).*
+
+---
+
+## ⚡ Quick Start
+
+Open a terminal in **any** project folder and type:
+
+```bash
+devai
+```
+
+### In-Session Commands
 
 | Command        | Description                                          |
 | -------------- | ---------------------------------------------------- |
-| `/build`       | Run build/test and auto-fix any errors               |
-| `/build <cmd>` | Set a custom build command (e.g., `/build npm test`) |
-| `undo` / `n`   | Revert the last AI edit instantly (Git Rollback)     |
-| `exit`         | Quit DevAI                                           |
-
-## Safety Features: Git Rollback 🛡️
-
-DevAI now performs a **Safety Checkpoint** before every file edit.
-
-1.  It snapshots your uncommitted changes using `git stash`.
-2.  It applies the AI's changes.
-3.  It asks: **"Review changes. Keep them? (y/undo)"**
-
-- **Type `y`**: Keeps the changes.
-- **Type `undo`**: Instantly wipes the AI's changes and restores your exact previous state.
-
-## Recent Updates
-
-- **Llama 3.1 Support**: Added Llama 3.1 70B & 405B models via NVIDIA NIM.
-- **Smart Context**: Optimized to reduce token usage and improve speed.
-- **JSON Recovery**: Auto-fixes truncated responses for large projects.
-- **UI Polish**: Added loading spinners and hidden code blocks for cleaner output.
-- **Tech Stack Enforcement**: Defaults to Modern React/Tailwind unless specified otherwise.
-
-## How It Works
-
-1. Select an AI model
-2. Point to your project folder
-3. Describe what you want built or changed
-4. DevAI plans, codes, and patches your files
-5. Use `/build` to auto-test and fix errors
+| `/plan <desc>` | Enter Planner Mode to research and document an architecture plan |
+| `/build`       | Drop into the Self-Debugger. Runs your build/test script and auto-fixes errors |
+| `/build <cmd>` | Set a custom build command globally (e.g., `/build npm run typecheck`) |
+| `/git <msg>`   | Quick sequence to add, commit, and push your current changes |
+| `/polish`      | Triggers the UI/UX auto-polish designer agent        |
+| `undo` / `n`   | Revert the very last AI edit instantly               |
+| `exit`         | Quit the DevAI session                               |
 
 ## License
 

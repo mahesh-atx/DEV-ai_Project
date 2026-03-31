@@ -513,6 +513,8 @@ export async function runCommands(commands, projectDir, options = {}) {
           }]);
           trimmed = newCommand;
           console.log(chalk.cyan(`  Re-evaluating: ${trimmed}`));
+        } else {
+          console.log(chalk.red("  Invalid selection. Please use arrow keys to navigate."));
         }
       } else {
         checkPass = true;

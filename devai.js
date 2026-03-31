@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * devai.js — DevAI CLI Orchestrator
  * Main entry point: model selection, mode routing, interactive loop.
@@ -627,7 +628,8 @@ export async function main() {
          showDivider();
          continue;
       } else if (selectedMode === "orchestrator") {
-        const result = await executeParallelAgents(input, smartContext, runtime, { autoPolish });
+        console.log(chalk.bold.magenta("\n  [ORCHESTRATOR MODE] Initializing Orchestrator Agent..."));
+        const result = await runAgentPipeline(input, smartContext, runtime, { autoPolish, role: "orchestrator" });
         finalMessage = result.finalMessage;
         totalTokens = result.totalTokens;
       } else {

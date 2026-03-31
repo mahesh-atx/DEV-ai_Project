@@ -1,8 +1,11 @@
 {
-  "name": "devai",
+  "name": "devai-cli-coder",
   "version": "1.0.0",
   "type": "module",
   "description": "DevAI - Autonomous AI coding assistant",
+  "bin": {
+    "devai": "./devai.js"
+  },
   "scripts": {
     "devai": "node devai.js",
     "chat": "node chat.js",

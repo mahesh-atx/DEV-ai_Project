@@ -207,6 +207,55 @@ const TOOLS_SCHEMA = [
         additionalProperties: false
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "task",
+      description: "Spawn a completely isolated subagent to accomplish a complex coding or research step. The orchestrator must not edit code directly; it must delegate via this tool.",
+      parameters: {
+        type: "object",
+        properties: {
+          description: { type: "string", description: "Short 3-5 word summary." },
+          prompt: { type: "string", description: "Full, detailed instructions and context for the subagent so it knows exactly what to do independently." },
+          subagent_type: { type: "string", description: "The mode of the subagent: 'explorer', 'coder', or 'debugger'." },
+          task_id: { type: "string", description: "Optional unique task ID." }
+        },
+        required: ["description", "prompt", "subagent_type"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "websearch",
+      description: "Search the web for information using Exa AI. Returns relevant search results.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query string." },
+          numResults: { type: "integer", description: "Optional: Number of results to return (default: 8)." }
+        },
+        required: ["query"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "webfetch",
+      description: "Fetch and download a specific URL content as markdown. Used to read documentation or web pages.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The full URL to fetch (must start with http:// or https://)." }
+        },
+        required: ["url"],
+        additionalProperties: false
+      }
+    }
   }
 ];
 
@@ -216,7 +265,9 @@ function getToolsForRole(role) {
   if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "read_file", "finish_task", ...universal].includes(t.function.name));
   if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", ...universal].includes(t.function.name));
   if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", ...universal].includes(t.function.name));
-  return TOOLS_SCHEMA;
+  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task"].includes(t.function.name));
+  // Remove 'task' tool for default non-orchestrator roles to prevent infinite recursion
+  return TOOLS_SCHEMA.filter(t => t.function.name !== 'task');
 }
 
 /**
@@ -399,6 +450,32 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                message: chalk.yellow("Your reply:")
             }]);
             toolResultStr = ans.reply;
+          }
+          else if (tc.function.name === "websearch") {
+            const { websearch } = await import("../utils/webTools.js");
+            const res = await websearch(args.query, args.numResults || 8);
+            if (res.error) toolResultStr = `Error: ${res.error}`;
+            else toolResultStr = JSON.stringify(res.results, null, 2);
+          }
+          else if (tc.function.name === "webfetch") {
+            const { webfetch } = await import("../utils/webTools.js");
+            const res = await webfetch(args.url);
+            if (res.error) toolResultStr = `Error: ${res.error}`;
+            else toolResultStr = res.content;
+          }
+          else if (tc.function.name === "task") {
+            console.log(chalk.magenta(`\n  [TASK DELEGATION] Spawning sub-agent: ${args.subagent_type}`));
+            console.log(chalk.magenta(`    ↳ ${args.description} | ID: ${args.task_id || 'N/A'}`));
+            
+            const subResult = await runAgentPipeline(
+               `[ORCHESTRATOR DELEGATION]: ${args.description}\n\nTask Prompt:\n${args.prompt}`, 
+               smartContext, 
+               runtime, 
+               { role: args.subagent_type || "coder" }
+            );
+            
+            toolResultStr = `<task_result task_id="${args.task_id || ''}">\n\nSub-Agent Completed.\nFinal Output:\n${subResult.finalMessage?.content || "No output"}\n\n</task_result>`;
+            console.log(chalk.magenta(`  [TASK DELEGATION] Sub-agent finished: ${args.description}`));
           }
           else if (tc.function.name === "delegate_task") {
             console.log(chalk.magenta(`\n  [DELEGATE] Spawning sub-agent (explorer)...`));
