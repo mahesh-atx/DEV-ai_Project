@@ -64,6 +64,34 @@ Open a terminal in **any** project folder and type:
 devai
 ```
 
+On first launch, DevAI will detect that no API key is configured and walk you through an interactive setup:
+
+```
+ ┌─────────────────────────────────────────┐
+ │          Welcome to DevAI               │
+ │                                         │
+ │  No NVIDIA API Key Found                │
+ │  Get your free key at: build.nvidia.com │
+ │                                         │
+ │  Enter your API key: nvapi-...          │
+ └─────────────────────────────────────────┘
+```
+
+The key is stored at `~/.config/devai/config.json` and loaded automatically on future runs.
+
+### API Key Configuration
+
+DevAI needs an **NVIDIA API key** to connect to AI models. You have two ways to provide it:
+
+| Method | How |
+|--------|-----|
+| **Interactive setup** (recommended) | Just run `devai` — it prompts you on first launch |
+| **`.env` file** | Create a `.env` file in your project root: `NVIDIA_API_KEY=nvapi-your-key-here` |
+
+> Get your free API key at [https://build.nvidia.com](https://build.nvidia.com).
+
+The `.env` key takes priority over the stored config if both exist. You can change or clear the stored key anytime via the **Settings** menu in DevAI.
+
 ### In-Session Commands
 
 | Command        | Description                                          |

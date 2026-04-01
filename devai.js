@@ -56,8 +56,10 @@ import {
   logErrorToFile,
 } from "./cli-ui.js";
 import inquirer from "inquirer";
+import { injectApiKeyToEnv } from "./utils/configManager.js";
 
 dotenv.config();
+injectApiKeyToEnv();
 
 process.on('uncaughtException', (err) => {
   const msg = err?.message || String(err);

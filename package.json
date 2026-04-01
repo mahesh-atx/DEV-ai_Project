@@ -1,10 +1,10 @@
 {
   "name": "devai-cli-coder",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "type": "module",
   "description": "DevAI - Autonomous AI coding assistant",
   "bin": {
-    "devai": "./devai.js"
+    "devai": "./bin/devai.js"
   },
   "scripts": {
     "devai": "node devai.js",

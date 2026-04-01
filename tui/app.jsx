@@ -5,11 +5,13 @@ import ModeSelect from './components/ModeSelect.jsx';
 import ModelSelect from './components/ModelSelect.jsx';
 import ChatScreen from './components/ChatScreen.jsx';
 import SettingsScreen from './components/SettingsScreen.jsx';
+import SetupScreen from './components/SetupScreen.jsx';
 import { MODES } from './constants.js';
 import { listModels, getModel } from '../config/models.js';
+import { hasApiKey } from '../utils/configManager.js';
 
 const App = () => {
-  const [view, setView] = useState('welcome');
+  const [view, setView] = useState(hasApiKey() ? 'welcome' : 'setup');
   const [mode, setMode] = useState(MODES[0]);
   const [modelKey, setModelKey] = useState('kimi');
   const [modelConfig, setModelConfig] = useState(null);
@@ -44,6 +46,16 @@ const App = () => {
 
   return (
     <Box>
+      {view === 'setup' && (
+        <SetupScreen
+          onComplete={() => {
+            const config = resolveModel(modelKey);
+            if (config) setModelConfig(config);
+            setView('welcome');
+          }}
+        />
+      )}
+
       {view === 'welcome' && (
         <MainMenu
           mode={mode}
