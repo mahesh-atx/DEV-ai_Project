@@ -1,11 +1,11 @@
 /**
- * Polish Agent — Combined Refactor + UI Improvement Agent
+ * Polish Agent - Combined Refactor + UI Improvement Agent
  * Analyzes existing code and suggests quality + UI enhancements
  * Uses the same model as the Builder agent (single-model approach)
  */
 
 const POLISH_PROMPT = `
-You are the Polish Agent — a code quality and UI specialist.
+You are the Polish Agent - a code quality and UI specialist.
 
 YOUR JOB:
 Analyze the provided code and return improvements. You must:
@@ -25,10 +25,10 @@ Analyze the provided code and return improvements. You must:
    - Improve color contrast and consistency
 
 3. RULES:
-   - Keep ALL existing functionality — do NOT break anything
+   - Keep ALL existing functionality - do NOT break anything
    - Use surgical edits (search/replace) when possible
    - Only create new files if genuinely needed
-   - Be conservative — improve, don't rewrite
+   - Be conservative - improve, don't rewrite
 
 RETURN VALID JSON ONLY (no markdown, no explanation):
 {
@@ -45,40 +45,53 @@ RETURN VALID JSON ONLY (no markdown, no explanation):
 }
 `;
 
+function emitReporter(reporter, method, payload) {
+  if (reporter && typeof reporter[method] === 'function') {
+    reporter[method](payload);
+  }
+}
+
+function logLine(runtime, level, message) {
+  const reporter = runtime?.reporter || null;
+  emitReporter(reporter, 'log', { level, message });
+  if (!runtime?.silent) {
+    console.log(message);
+  }
+}
+
 /**
  * Run the Polish Agent on current codebase
  * @param {string} context - Smart context with file contents
- * @param {Object} runtime - { callAI, parseJSON } from devai
+ * @param {Object} runtime - { callAI, parseJSON, reporter?, silent? }
  * @returns {Object|null} Parsed JSON result with file edits, or null on failure
  */
 export async function runPolishAgent(context, runtime) {
-  console.log("\n🎨 Polish Agent: Analyzing code for improvements...");
-  
-  const fullPrompt = POLISH_PROMPT + "\n\nCODE TO IMPROVE:\n" + context;
-  
+  logLine(runtime, 'info', 'Polish Agent: analyzing code for improvements...');
+
+  const fullPrompt = `${POLISH_PROMPT}\n\nCODE TO IMPROVE:\n${context}`;
+
   try {
     const reply = await runtime.callAI(fullPrompt);
-    
+
     if (!reply || !reply.trim()) {
-      console.log("⚠️  Polish Agent returned empty response.");
+      logLine(runtime, 'warning', 'Polish Agent returned empty response.');
       return null;
     }
-    
+
     const parsed = runtime.parseJSON(reply);
-    
+
     if (!parsed) {
-      console.log("⚠️  Polish Agent response could not be parsed.");
+      logLine(runtime, 'warning', 'Polish Agent response could not be parsed.');
       return null;
     }
-    
+
     if (parsed.plan) {
-      console.log("\n✨ Polish improvements:");
-      parsed.plan.forEach((p, i) => console.log(`  ${i + 1}. ${p}`));
+      logLine(runtime, 'success', `Polish improvements planned: ${parsed.plan.length}`);
     }
-    
+
     return parsed;
-  } catch (err) {
-    console.log("❌ Polish Agent error:", err.message);
+  } catch (error) {
+    logLine(runtime, 'error', `Polish Agent error: ${error.message}`);
     return null;
   }
 }

@@ -172,6 +172,50 @@ const MODELS = {
         enable_thinking: true
       }
     },
+  },
+
+  // 🦙 Meta Llama 3.1 (Fast and efficient)
+  llama_fast: {
+    id: "meta/llama-3.1-70b-instruct",
+    name: "Llama 3.1 70B",
+    description: "Fast and efficient instruction-following model",
+    envKey: "NVIDIA_API_KEY",
+
+    maxTokens: 1024,
+    contextLimit: 131072,
+
+    temperature: 0.2,
+    topP: 0.7,
+
+    isMultimodal: false,
+    supportsThinking: false,
+
+    speed: "fast",
+    role: "coding",
+
+    extraParams: {},
+  },
+
+  // 🚀 OpenAI GPT OSS (Powerful open-source)
+  gpt_oss: {
+    id: "openai/gpt-oss-120b",
+    name: "GPT OSS 120B",
+    description: "Powerful open-source model for complex tasks",
+    envKey: "NVIDIA_API_KEY",
+
+    maxTokens: 4096,
+    contextLimit: 131072,
+
+    temperature: 1,
+    topP: 1,
+
+    isMultimodal: false,
+    supportsThinking: false,
+
+    speed: "slow",
+    role: "general",
+
+    extraParams: {},
   }
 };
 

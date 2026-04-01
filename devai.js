@@ -519,14 +519,14 @@ export async function main() {
           }
           return fs.readFileSync(finalPath, "utf8");
         },
-        patchFile: (filePath, content, edits) => patchFile(projectDir, filePath, content, edits),
-        runCommand: async (cmd, cwd) => {
+        patchFile: (filePath, content, edits, patchOptions = {}) => patchFile(projectDir, filePath, content, edits, patchOptions),
+        runCommand: async (cmd, cwd, commandOptions = {}) => {
           const workingDir = cwd ? path.resolve(projectDir, cwd) : projectDir;
           const relativeToProject = path.relative(path.resolve(projectDir), workingDir);
           if (relativeToProject.startsWith("..") || path.isAbsolute(relativeToProject)) {
             throw new Error(`Security Exception: Working directory traversal denied for ${cwd}`);
           }
-          return await runCommands([cmd], workingDir, { source: "tool_agent" });
+          return await runCommands([cmd], workingDir, { source: "tool_agent", ...commandOptions });
         },
         listFiles: async (subpath = ".", depth = 2, includeHidden = false) =>
           listWorkspaceEntries(projectDir, subpath, { depth, includeHidden }),

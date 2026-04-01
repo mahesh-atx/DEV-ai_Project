@@ -6,6 +6,18 @@ import fs from "fs";
 import path from "path";
 import { createPatch } from "diff";
 
+function emitReporter(reporter, method, payload) {
+  if (reporter && typeof reporter[method] === "function") {
+    reporter[method](payload);
+  }
+}
+
+function logWithOptions(options, ...args) {
+  if (!options?.silent) {
+    console.log(...args);
+  }
+}
+
 function similarity(a, b) {
   const la = a.length, lb = b.length;
   if (la === 0 || lb === 0) return 0;
@@ -31,7 +43,7 @@ function similarity(a, b) {
   return 1 - dp[la][lb] / Math.max(la, lb);
 }
 
-function fuzzyFindAndReplace(fileContent, search, replace) {
+function fuzzyFindAndReplace(fileContent, search, replace, onFuzzyMatch = null) {
   // Exact match first
   const idx = fileContent.indexOf(search);
   if (idx !== -1) {
@@ -68,14 +80,18 @@ function fuzzyFindAndReplace(fileContent, search, replace) {
   if (bestScore >= 0.8 && bestIdx >= 0) {
     const before = fileLines.slice(0, bestIdx);
     const after = fileLines.slice(bestIdx + windowSize);
-    console.log(`    ↳ Fuzzy matched (${(bestScore * 100).toFixed(0)}% similar)`);
+    if (typeof onFuzzyMatch === "function") {
+      onFuzzyMatch(bestScore);
+    }
     return [...before, replace, ...after].join("\n");
   }
 
   return null; // No match found
 }
 
-export function patchFile(projectDir, filePath, newContent, edits = null) {
+export function patchFile(projectDir, filePath, newContent, edits = null, options = {}) {
+  const reporter = options.reporter || null;
+
   // Sanitize path — strictly strip all leading slashes before resolving.
   const cleanPath = filePath.replace(/^(\/|\\)+/, "");
   const normalized = path.normalize(cleanPath).replace(/^(\.\.[/\\])+/, "");
@@ -84,7 +100,13 @@ export function patchFile(projectDir, filePath, newContent, edits = null) {
   
   // Security: ensure the file stays within the project directory
   if (relativeToProject.startsWith("..") || path.isAbsolute(relativeToProject)) {
-    console.log("❌ Blocked:", filePath, "(path escape attempt)");
+    emitReporter(reporter, "fileChange", {
+      path: normalized,
+      action: "blocked",
+      status: "error",
+      detail: "Path traversal denied",
+    });
+    logWithOptions(options, "❌ Blocked:", filePath, "(path escape attempt)");
     throw new Error(`Security Exception: Path traversal denied for ${filePath}`);
   }
 
@@ -95,7 +117,13 @@ export function patchFile(projectDir, filePath, newContent, edits = null) {
     // === SURGICAL EDIT MODE (search/replace) ===
     if (edits && Array.isArray(edits) && edits.length > 0) {
       if (!fs.existsSync(fullPath)) {
-        console.log("  ❌ Cannot edit (file doesn't exist):", normalized);
+        emitReporter(reporter, "fileChange", {
+          path: normalized,
+          action: "edit",
+          status: "error",
+          detail: "File does not exist",
+        });
+        logWithOptions(options, "  ❌ Cannot edit (file doesn't exist):", normalized);
         return;
       }
       let content = fs.readFileSync(fullPath, "utf8");
@@ -103,42 +131,77 @@ export function patchFile(projectDir, filePath, newContent, edits = null) {
 
       for (const edit of edits) {
         if (!edit.search || typeof edit.replace !== "string") {
-          console.log("    ⚠️  Skipped invalid edit (missing search/replace)");
+          logWithOptions(options, "    ⚠️  Skipped invalid edit (missing search/replace)");
           failed++;
           continue;
         }
-        const result = fuzzyFindAndReplace(content, edit.search, edit.replace);
+        const result = fuzzyFindAndReplace(content, edit.search, edit.replace, (score) => {
+          emitReporter(reporter, "log", {
+            level: "info",
+            message: `Fuzzy matched ${normalized} at ${(score * 100).toFixed(0)}% similarity`,
+          });
+          logWithOptions(options, `    ↳ Fuzzy matched (${(score * 100).toFixed(0)}% similar)`);
+        });
         if (result !== null) {
           content = result;
           applied++;
         } else {
-          console.log(`    ⚠️  Could not find match for search block (${edit.search.split("\n").length} lines)`);
+          logWithOptions(options, `    ⚠️  Could not find match for search block (${edit.search.split("\n").length} lines)`);
           failed++;
         }
       }
 
       fs.writeFileSync(fullPath, content, "utf8");
-      console.log(`  🔧 Surgical edit: ${normalized} (${applied} applied, ${failed} failed)`);
+      emitReporter(reporter, "fileChange", {
+        path: normalized,
+        action: "edit",
+        status: failed > 0 ? "warning" : "success",
+        applied,
+        failed,
+      });
+      logWithOptions(options, `  🔧 Surgical edit: ${normalized} (${applied} applied, ${failed} failed)`);
       return;
     }
 
     // === FULL OVERWRITE MODE (backward-compatible) ===
     if (!fs.existsSync(fullPath)) {
       fs.writeFileSync(fullPath, newContent, "utf8");
-      console.log("  📄 Created:", normalized);
+      emitReporter(reporter, "fileChange", {
+        path: normalized,
+        action: "create",
+        status: "success",
+      });
+      logWithOptions(options, "  📄 Created:", normalized);
       return;
     }
 
     const oldContent = fs.readFileSync(fullPath, "utf8");
     if (oldContent === newContent) {
-      console.log("  ✓ No change:", normalized);
+      emitReporter(reporter, "fileChange", {
+        path: normalized,
+        action: "noop",
+        status: "info",
+      });
+      logWithOptions(options, "  ✓ No change:", normalized);
       return;
     }
 
     const patch = createPatch(filePath, oldContent, newContent);
     fs.writeFileSync(fullPath, newContent, "utf8");
-    console.log("  🛠 Patched:", normalized);
+    emitReporter(reporter, "fileChange", {
+      path: normalized,
+      action: "patch",
+      status: "success",
+      diffBytes: patch.length,
+    });
+    logWithOptions(options, "  🛠 Patched:", normalized);
   } catch (e) {
-    console.log("  ❌ Failed to write:", normalized, "—", e.message);
+    emitReporter(reporter, "fileChange", {
+      path: normalized,
+      action: edits ? "edit" : "write",
+      status: "error",
+      detail: e.message,
+    });
+    logWithOptions(options, "  ❌ Failed to write:", normalized, "—", e.message);
   }
 }

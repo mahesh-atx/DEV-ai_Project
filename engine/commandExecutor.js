@@ -20,11 +20,26 @@ const PACKAGE_MANAGER_FILES = {
   pip: ["requirements.txt", "pyproject.toml"],
 };
 
+function emitReporter(reporter, method, payload) {
+  if (reporter && typeof reporter[method] === "function") {
+    reporter[method](payload);
+  }
+}
 
+function logWithUi(ui, ...args) {
+  if (!ui?.silent) {
+    console.log(...args);
+  }
+}
 
-async function askBlockAction(command, reason) {
-  console.log(chalk.red(`\n  BLOCKED  ${command}`));
-  console.log(chalk.gray(`    Reason: ${reason}`));
+async function askBlockAction(command, reason, ui = {}) {
+  emitReporter(ui.reporter, "commandResult", {
+    command,
+    outcome: "blocked",
+    preview: reason,
+  });
+  logWithUi(ui, chalk.red(`\n  BLOCKED  ${command}`));
+  logWithUi(ui, chalk.gray(`    Reason: ${reason}`));
   
   const { action } = await inquirer.prompt([
     {
@@ -301,14 +316,21 @@ export function classifyParsedCommand(parsed, projectDir, policy) {
   return { allowed: false, intent: "unknown", mode: "blocked", reason: "Executable is not in the command policy" };
 }
 
-function previewCommand(rawCommand, classification, parsed) {
-  console.log(chalk.cyan("\nCommand Preview"));
-  console.log(chalk.gray("─".repeat(48)));
-  console.log(chalk.white(`  Command: ${rawCommand}`));
-  console.log(chalk.gray(`  Intent:  ${classification.intent}`));
-  console.log(chalk.gray(`  Policy:  ${classification.mode}`));
-  console.log(chalk.gray(`  Reason:  ${classification.reason}`));
-  console.log(chalk.gray(`  Parsed:  ${parsed.executable}${parsed.args.length ? " " + parsed.args.join(" ") : ""}`));
+function previewCommand(rawCommand, classification, parsed, ui = {}) {
+  emitReporter(ui.reporter, "commandPreview", {
+    command: rawCommand,
+    intent: classification.intent,
+    policy: classification.mode,
+    reason: classification.reason,
+    parsed: `${parsed.executable}${parsed.args.length ? " " + parsed.args.join(" ") : ""}`,
+  });
+  logWithUi(ui, chalk.cyan("\nCommand Preview"));
+  logWithUi(ui, chalk.gray("─".repeat(48)));
+  logWithUi(ui, chalk.white(`  Command: ${rawCommand}`));
+  logWithUi(ui, chalk.gray(`  Intent:  ${classification.intent}`));
+  logWithUi(ui, chalk.gray(`  Policy:  ${classification.mode}`));
+  logWithUi(ui, chalk.gray(`  Reason:  ${classification.reason}`));
+  logWithUi(ui, chalk.gray(`  Parsed:  ${parsed.executable}${parsed.args.length ? " " + parsed.args.join(" ") : ""}`));
 }
 
 function executeParsedCommand(parsed, projectDir, timeoutMs) {
@@ -397,9 +419,13 @@ export async function runCommands(commands, projectDir, options = {}) {
   const policy = loadProjectCommandPolicy(projectDir);
   const source = options.source || "ai";
   const dryRun = options.dryRun ?? policy.dryRun;
+  const ui = {
+    reporter: options.reporter || null,
+    silent: !!options.silent,
+  };
 
-  console.log(chalk.cyan("\nCommand Executor"));
-  console.log(chalk.gray("─".repeat(48)));
+  logWithUi(ui, chalk.cyan("\nCommand Executor"));
+  logWithUi(ui, chalk.gray("─".repeat(48)));
 
   let executed = 0;
   let failed = 0;
@@ -445,10 +471,10 @@ export async function runCommands(commands, projectDir, options = {}) {
         if (!classification.allowed || classification.mode === "blocked") {
           isBlocked = true;
           blockReason = classification.reason;
-          previewCommand(trimmed, classification, parsed);
+          previewCommand(trimmed, classification, parsed, ui);
         } else if (classification.mode === "confirm" && !dryRun) {
           needsConfirm = true;
-          previewCommand(trimmed, classification, parsed);
+          previewCommand(trimmed, classification, parsed, ui);
         }
       } catch (error) {
         isBlocked = true;
@@ -457,20 +483,20 @@ export async function runCommands(commands, projectDir, options = {}) {
 
       if (!isBlocked && !needsConfirm && parsed?.executable) {
         if (!classification) classification = classifyParsedCommand(parsed, projectDir, policy);
-        previewCommand(trimmed, classification, parsed);
+        previewCommand(trimmed, classification, parsed, ui);
       }
 
       if (isBlocked) {
-        const resolution = await askBlockAction(trimmed, blockReason);
+        const resolution = await askBlockAction(trimmed, blockReason, ui);
         if (resolution.action === "skip") {
-          console.log(chalk.gray("  Result: skipped by user"));
+          logWithUi(ui, chalk.gray("  Result: skipped by user"));
           logs += `${trimmed} (Blocked & Skipped): ${blockReason}\n\n`;
           appendCommandLog(projectDir, policy, { source, command: trimmed, outcome: "blocked", reason: blockReason });
           blocked++;
           checkPass = true; // break out of check loop
           parsed = null;    // avoid execution
         } else if (resolution.action === "run_anyway") {
-          console.log(chalk.yellow("  Result: user forced run"));
+          logWithUi(ui, chalk.yellow("  Result: user forced run"));
           checkPass = true; // proceed to execution
           if (!parsed) {
              try { parsed = buildParsedCommand(trimmed); } catch(e) {} // re-parse after user edit may fail
@@ -480,7 +506,7 @@ export async function runCommands(commands, projectDir, options = {}) {
           }
         } else if (resolution.action === "run_edited") {
           trimmed = resolution.command;
-          console.log(chalk.cyan(`  Re-evaluating: ${trimmed}`));
+          logWithUi(ui, chalk.cyan(`  Re-evaluating: ${trimmed}`));
           // Loops back to check the new trimmed command
         }
       } else if (needsConfirm) {
@@ -496,7 +522,7 @@ export async function runCommands(commands, projectDir, options = {}) {
         }]);
 
         if (action === "skip") {
-          console.log(chalk.gray("  Result: skipped by user"));
+          logWithUi(ui, chalk.gray("  Result: skipped by user"));
           logs += `${trimmed} (Skipped): User declined permission to run this command.\n\n`;
           appendCommandLog(projectDir, policy, { source, command: trimmed, parsed: parsed.tokens, outcome: "skipped", reason: "user_declined", intent: classification.intent });
           skipped++;
@@ -512,9 +538,9 @@ export async function runCommands(commands, projectDir, options = {}) {
             default: trimmed
           }]);
           trimmed = newCommand;
-          console.log(chalk.cyan(`  Re-evaluating: ${trimmed}`));
+          logWithUi(ui, chalk.cyan(`  Re-evaluating: ${trimmed}`));
         } else {
-          console.log(chalk.red("  Invalid selection. Please use arrow keys to navigate."));
+          logWithUi(ui, chalk.red("  Invalid selection. Please use arrow keys to navigate."));
         }
       } else {
         checkPass = true;
@@ -526,14 +552,14 @@ export async function runCommands(commands, projectDir, options = {}) {
     }
 
     if (!isBlocked && dryRun && classification.mode === "confirm") {
-      console.log(chalk.yellow("  Result: dry-run only"));
+      logWithUi(ui, chalk.yellow("  Result: dry-run only"));
       appendCommandLog(projectDir, policy, { source, command: trimmed, parsed: parsed.tokens, outcome: "dry_run", intent: classification.intent });
       skipped++;
       continue;
     }
 
     if (dryRun) {
-      console.log(chalk.yellow("  Result: dry-run only"));
+      logWithUi(ui, chalk.yellow("  Result: dry-run only"));
       appendCommandLog(projectDir, policy, { source, command: trimmed, parsed: parsed.tokens, outcome: "dry_run", intent: classification.intent });
       skipped++;
       continue;
@@ -544,12 +570,17 @@ export async function runCommands(commands, projectDir, options = {}) {
 
     if (result.status === 0) {
       if (outputPreview) {
-        console.log(chalk.gray(outputPreview));
+        logWithUi(ui, chalk.gray(outputPreview));
         logs += `${trimmed} (Success):\n${outputPreview}\n\n`;
       } else {
         logs += `${trimmed} (Success)\n\n`;
       }
-      console.log(chalk.green("  Result: success"));
+      emitReporter(ui.reporter, "commandResult", {
+        command: trimmed,
+        outcome: "success",
+        preview: outputPreview,
+      });
+      logWithUi(ui, chalk.green("  Result: success"));
       appendCommandLog(projectDir, policy, {
         source,
         command: trimmed,
@@ -564,8 +595,13 @@ export async function runCommands(commands, projectDir, options = {}) {
 
     failed++;
     const combinedError = `${result.stderr || ""}\n${result.stdout || ""}`.trim();
-    console.log(chalk.red("  Result: failed"));
-    if (outputPreview) console.log(chalk.gray(outputPreview));
+    emitReporter(ui.reporter, "commandResult", {
+      command: trimmed,
+      outcome: "failed",
+      preview: outputPreview || combinedError,
+    });
+    logWithUi(ui, chalk.red("  Result: failed"));
+    if (outputPreview) logWithUi(ui, chalk.gray(outputPreview));
     logs += `${trimmed} (Failed with status ${result.status}):\n${combinedError}\n\n`;
     appendCommandLog(projectDir, policy, {
       source,
@@ -580,7 +616,7 @@ export async function runCommands(commands, projectDir, options = {}) {
     if (policy.autoInstallMissingDeps && source !== "auto_install") {
       const installCommand = inferInstallCommand(combinedError, projectDir);
       if (installCommand) {
-        console.log(chalk.yellow(`  Auto-fix candidate: ${installCommand}`));
+        logWithUi(ui, chalk.yellow(`  Auto-fix candidate: ${installCommand}`));
         const installResult = await runCommands([installCommand], projectDir, {
           ...options,
           source: "auto_install",
@@ -590,8 +626,13 @@ export async function runCommands(commands, projectDir, options = {}) {
           const retryResult = executeParsedCommand(parsed, projectDir, policy.commandTimeoutMs);
           const retryPreview = summarizeOutput(retryResult);
           if (retryResult.status === 0) {
-            if (retryPreview) console.log(chalk.gray(retryPreview));
-            console.log(chalk.green("  Retry: success"));
+            if (retryPreview) logWithUi(ui, chalk.gray(retryPreview));
+            emitReporter(ui.reporter, "commandResult", {
+              command: trimmed,
+              outcome: "retry_success",
+              preview: retryPreview,
+            });
+            logWithUi(ui, chalk.green("  Retry: success"));
             appendCommandLog(projectDir, policy, {
               source,
               command: trimmed,
@@ -603,15 +644,21 @@ export async function runCommands(commands, projectDir, options = {}) {
             executed++;
             failed--;
           } else {
-            console.log(chalk.red("  Retry: failed"));
+            logWithUi(ui, chalk.red("  Retry: failed"));
           }
         }
       }
     }
   }
 
-  console.log(chalk.gray("─".repeat(48)));
-  console.log(`  Results: ${executed} executed, ${failed} failed, ${blocked} blocked, ${skipped} skipped`);
+  emitReporter(ui.reporter, "summary", {
+    commandsRun: executed,
+    commandFailures: failed,
+    blockedCommands: blocked,
+    skippedCommands: skipped,
+  });
+  logWithUi(ui, chalk.gray("─".repeat(48)));
+  logWithUi(ui, `  Results: ${executed} executed, ${failed} failed, ${blocked} blocked, ${skipped} skipped`);
   return { executed, failed, blocked, skipped, logs: logs.trim() };
 }
 
