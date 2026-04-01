@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Box, Text, useStdout, useInput } from 'ink';
 import TextInput from 'ink-text-input';
+import SelectInput from 'ink-select-input';
 import stringWidth from 'string-width';
 import StreamingPanel from './StreamingPanel.jsx';
 import { MODES, THEME } from '../constants.js';
@@ -118,9 +119,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [sessionTime, setSessionTime] = useState('0:00');
   const [customBuildCmd, setCustomBuildCmd] = useState('');
   
-  // Input History
+  // Input History & Questions Box
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [showQuestions, setShowQuestions] = useState(false);
   
   // Track line scroll offset rather than message scroll offset
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -129,6 +131,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [streamPercent, setStreamPercent] = useState(0);
   const [streamChars, setStreamChars] = useState(0);
   const [streamThinkingChars, setStreamThinkingChars] = useState(0);
+  const [streamThinkingContent, setStreamThinkingContent] = useState('');
+  const [streamResponseContent, setStreamResponseContent] = useState('');
   const [streamFiles, setStreamFiles] = useState([]);
   const [streamElapsed, setStreamElapsed] = useState('0.0');
   const [activityLog, setActivityLog] = useState([]);
@@ -138,6 +142,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [lastFiles, setLastFiles] = useState([]);
   const [lastActivityLog, setLastActivityLog] = useState([]);
   const [lastStatus, setLastStatus] = useState('Ready');
+
+  // ask_user tool state
+  const [pendingQuestion, setPendingQuestion] = useState(null);
+  const questionResolverRef = useRef(null);
 
   const startTimeRef = useRef(null);
   const timerRef = useRef(null);
@@ -190,8 +198,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
     return () => clearInterval(timer);
   }, [isThinking]);
 
-  // Global input interceptor for Interruptions, Scrolling, and History
+  // Global input interceptor for Interruptions, Scrolling, History, and Questions Box
   useInput((inputChars, key) => {
+    // Allow input when there's a pending agent question
+    if (pendingQuestion) {
+      return;
+    }
+
     if (isThinkingRef.current) {
       // Cancel execution
       if (key.escape || (key.ctrl && inputChars === 'c')) {
@@ -201,28 +214,40 @@ const ChatScreen = ({ mode, model, onExit }) => {
         }
       }
     } else {
-      // 1. Scrolling controls (Restored arrows to scrolling)
-      if (key.upArrow) setScrollOffset((prev) => prev + 1);
-      if (key.downArrow) setScrollOffset((prev) => Math.max(0, prev - 1));
-      if (key.pageUp) setScrollOffset((prev) => prev + 10);
-      if (key.pageDown) setScrollOffset((prev) => Math.max(0, prev - 10));
-
-      // 2. Input History Navigation (Moved to Ctrl+P and Ctrl+N)
-      if (key.ctrl && inputChars === 'p') {
-        if (history.length > 0) {
-          const nextIndex = Math.min(historyIndex + 1, history.length - 1);
-          setHistoryIndex(nextIndex);
-          setInput(history[history.length - 1 - nextIndex]);
-        }
+      if (key.escape && showQuestions) {
+        setShowQuestions(false);
+        return;
       }
-      if (key.ctrl && inputChars === 'n') {
-        if (historyIndex > 0) {
-          const prevIndex = historyIndex - 1;
-          setHistoryIndex(prevIndex);
-          setInput(history[history.length - 1 - prevIndex]);
-        } else if (historyIndex === 0) {
-          setHistoryIndex(-1);
-          setInput('');
+
+      if (key.ctrl && inputChars === 'q') {
+        setShowQuestions((prev) => !prev);
+        return;
+      }
+
+      if (!showQuestions) {
+        // 1. Scrolling controls 
+        if (key.upArrow) setScrollOffset((prev) => prev + 1);
+        if (key.downArrow) setScrollOffset((prev) => Math.max(0, prev - 1));
+        if (key.pageUp) setScrollOffset((prev) => prev + 10);
+        if (key.pageDown) setScrollOffset((prev) => Math.max(0, prev - 10));
+
+        // 2. Input History Navigation (Inline scrolling)
+        if (key.ctrl && inputChars === 'p') {
+          if (history.length > 0) {
+            const nextIndex = Math.min(historyIndex + 1, history.length - 1);
+            setHistoryIndex(nextIndex);
+            setInput(history[history.length - 1 - nextIndex]);
+          }
+        }
+        if (key.ctrl && inputChars === 'n') {
+          if (historyIndex > 0) {
+            const prevIndex = historyIndex - 1;
+            setHistoryIndex(prevIndex);
+            setInput(history[history.length - 1 - prevIndex]);
+          } else if (historyIndex === 0) {
+            setHistoryIndex(-1);
+            setInput('');
+          }
         }
       }
     }
@@ -275,6 +300,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
     setStreamPercent(0);
     setStreamChars(0);
     setStreamThinkingChars(0);
+    setStreamThinkingContent('');
+    setStreamResponseContent('');
     setStreamFiles([]);
     setStreamElapsed('0.0');
     setActivityLog([]);
@@ -336,6 +363,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
     log: ({ level, message }) => {
       pushActivity(level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'status', message);
     },
+    askUser: ({ question }) => {
+      return new Promise((resolve) => {
+        pushActivity('status', `Agent asks: ${question}`);
+        setPendingQuestion(question);
+        questionResolverRef.current = resolve;
+      });
+    },
   }), [pushActivity, registerFile, updateSummary]);
 
   const runAskMode = useCallback(async (query, msgHistory) => {
@@ -376,12 +410,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
         if (delta?.reasoning_content) {
           thinkingChars += delta.reasoning_content.length;
           setStreamThinkingChars(thinkingChars);
+          setStreamThinkingContent((prev) => prev + delta.reasoning_content);
           setStreamPercent((value) => Math.min(value + 2, 94));
         }
         if (delta?.content) {
           sawContent = true;
           reply += delta.content;
           setStreamChars(reply.length);
+          setStreamResponseContent((prev) => prev + delta.content);
           setStreamPercent((value) => Math.min(Math.max(value, 12) + 1, 99));
         }
       }
@@ -468,12 +504,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
         if (delta?.reasoning_content) {
           thinkingChars += delta.reasoning_content.length;
           setStreamThinkingChars(thinkingChars);
+          setStreamThinkingContent((prev) => prev + delta.reasoning_content);
           setStreamPercent((value) => Math.min(value + 1, 70));
         }
 
         if (delta?.content) {
           reply += delta.content;
           setStreamChars(reply.length);
+          setStreamResponseContent((prev) => prev + delta.content);
           setStreamPercent((value) => Math.min(Math.max(value, 10) + 1, 98));
 
           pathRegex.lastIndex = Math.max(0, searchIndex - 16);
@@ -635,12 +673,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
           if (delta.reasoning_content) {
             thinkingChars += delta.reasoning_content.length;
             setStreamThinkingChars(thinkingChars);
+            setStreamThinkingContent((prev) => prev + delta.reasoning_content);
             setStreamPercent((value) => Math.min(value + 1, 65));
           }
 
           if (delta.content) {
             replyContent += delta.content;
             setStreamChars(replyContent.length);
+            setStreamResponseContent((prev) => prev + delta.content);
             setStreamPercent((value) => Math.min(Math.max(value, 10) + 1, 99));
           }
 
@@ -791,6 +831,23 @@ const ChatScreen = ({ mode, model, onExit }) => {
   ]);
 
   const handleSubmit = useCallback((value) => {
+    // Handle ask_user question response
+    if (pendingQuestion && questionResolverRef.current) {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+
+      // Add the response to chat history
+      setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
+
+      // Resolve the promise with the user's answer
+      const resolver = questionResolverRef.current;
+      questionResolverRef.current = null;
+      setPendingQuestion(null);
+      setInput('');
+      resolver(trimmed);
+      return;
+    }
+
     if (isThinkingRef.current) return;
 
     const trimmed = value.trim();
@@ -865,13 +922,42 @@ const ChatScreen = ({ mode, model, onExit }) => {
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [customBuildCmd, executeHandler, mode, nextId, onExit]);
+  }, [customBuildCmd, executeHandler, mode, nextId, onExit, pendingQuestion]);
 
   const handleChange = useCallback((value) => {
-    if (!isThinkingRef.current) {
+    if (!isThinkingRef.current || pendingQuestion) {
       setInput(value);
     }
-  }, []);
+  }, [pendingQuestion]);
+
+  // Handle Question Box Selection
+  const handleQuestionSelect = useCallback((item) => {
+    if (item.value === 'CANCEL' || item.value === 'NONE') {
+      setShowQuestions(false);
+    } else {
+      setShowQuestions(false);
+      handleSubmit(item.value);
+    }
+  }, [handleSubmit]);
+
+  // Memoize Questions Items for the Select List
+  const questionItems = useMemo(() => {
+    const items = [];
+    const uniqueHistory = [...new Set(history)].reverse();
+    
+    uniqueHistory.forEach((h, i) => {
+      items.push({ label: `[History]  ${truncate(h, 60)}`, value: h, key: `hist-${i}` });
+    });
+
+    // Note: Questions dynamically suggested by the LLM will be populated here in the future.
+
+    if (items.length === 0) {
+      items.push({ label: 'No history or suggested questions available.', value: 'NONE', key: 'none' });
+    }
+
+    items.push({ label: '← Back to typing (Esc)', value: 'CANCEL', key: 'cancel' });
+    return items;
+  }, [history]);
 
   // --------------------------------------------------------------------------
   // LINE WRAPPING AND SCROLL CALCULATION ENGINE
@@ -983,6 +1069,31 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const filled = Math.min(barWidth, Math.round((streamPercent / 100) * barWidth));
   const progressBar = `${'#'.repeat(filled)}${'-'.repeat(barWidth - filled)}`;
 
+  if (showQuestions) {
+    return (
+      <Box flexDirection="column" height={dims.rows - 1} width="100%" alignItems="center" justifyContent="center">
+        <Box borderStyle="round" borderColor={THEME.border} padding={2} flexDirection="column" width={72}>
+          <Text color={THEME.accent} bold marginBottom={1}>Select a Question</Text>
+          <Text color={THEME.dim} marginBottom={1}>Use ↑/↓ arrows to navigate, Enter to select</Text>
+          <Box flexDirection="column" paddingX={2}>
+            <SelectInput
+              items={questionItems}
+              onSelect={handleQuestionSelect}
+              indicatorComponent={({ isSelected }) => (
+                <Text color={isSelected ? THEME.accent : THEME.dim}>{isSelected ? '❯ ' : '  '}</Text>
+              )}
+              itemComponent={({ isSelected, label }) => (
+                <Text color={isSelected ? THEME.accent : THEME.text} bold={isSelected}>
+                  {label}
+                </Text>
+              )}
+            />
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" height={dims.rows - 1} width="100%">
       <Box
@@ -1032,6 +1143,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
                   percent={streamPercent}
                   chars={streamChars}
                   thinkingChars={streamThinkingChars}
+                  thinkingContent={streamThinkingContent}
+                  responseContent={streamResponseContent}
                   files={streamFiles}
                   elapsed={streamElapsed}
                 />
@@ -1071,6 +1184,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
             )}
           </Box>
 
+          {pendingQuestion && (
+            <Box flexDirection="column" borderStyle="round" borderColor={THEME.warning} paddingX={1} marginX={1} marginBottom={1}>
+              <Text color={THEME.warning} bold>Agent asks:</Text>
+              <Text color={THEME.text}>{pendingQuestion}</Text>
+              <Text color={THEME.dim}>Type your answer and press Enter</Text>
+            </Box>
+          )}
+
           <Box
             flexDirection="row"
             paddingX={1}
@@ -1080,8 +1201,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
             borderColor={THEME.border}
           >
             <Box marginRight={1}>
-              <Text color={isThinking ? THEME.error : THEME.accent} bold>
-                {isThinking ? '■' : '>'}
+              <Text color={pendingQuestion ? THEME.warning : isThinking ? THEME.error : THEME.accent} bold>
+                {pendingQuestion ? '?' : isThinking ? '■' : '>'}
               </Text>
             </Box>
             <Box flexGrow={1}>
@@ -1089,8 +1210,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
                 value={input}
                 onChange={handleChange}
                 onSubmit={handleSubmit}
-                placeholder={isThinking ? 'Press ESC to cancel execution...' : 'Type a message...'}
-                focus={!isThinking}
+                placeholder={pendingQuestion ? 'Type your answer...' : isThinking ? 'Press ESC to cancel execution...' : 'Type a message...'}
+                focus={!isThinking || pendingQuestion}
                 showCursor
               />
             </Box>
@@ -1180,6 +1301,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
             <Text color={THEME.dim}>  PgUp/PgDn - Fast scroll</Text>
             <Text color={THEME.dim}>  Ctrl+P    - Prev prompt</Text>
             <Text color={THEME.dim}>  Ctrl+N    - Next prompt</Text>
+            <Text color={THEME.dim}>  Ctrl+Q    - Questions</Text>
             <Text color={THEME.dim}>  Ctrl+C    - Cancel run</Text>
           </Box>
 

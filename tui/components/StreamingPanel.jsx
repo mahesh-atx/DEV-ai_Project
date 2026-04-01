@@ -2,24 +2,45 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { THEME } from '../constants.js';
 
-const StreamingPanel = ({ label = 'Generating', percent = 0, chars = 0, thinkingChars = 0, files = [], elapsed = '0.0' }) => {
+function truncateRight(text, max = 200) {
+  const str = String(text || '');
+  if (str.length <= max) return str;
+  return '...' + str.slice(-max);
+}
+
+const StreamingPanel = ({ label = 'Generating', percent = 0, chars = 0, thinkingChars = 0, thinkingContent = '', responseContent = '', files = [], elapsed = '0.0' }) => {
   const barWidth = 24;
   const filled = Math.min(barWidth, Math.round((percent / 100) * barWidth));
   const bar = '#'.repeat(filled) + '-'.repeat(barWidth - filled);
 
+  const thinkingPreview = truncateRight(thinkingContent, 250);
+  const responsePreview = truncateRight(responseContent, 300);
+
   return (
     <Box flexDirection="column" paddingX={2} marginBottom={1}>
-      {/* FIX: Replaced hardcoded ASCII with native Ink Box to prevent wrapping issues */}
-      {percent < 60 && (
-        <Box 
-          flexDirection="column" 
-          marginBottom={1} 
-          borderStyle="round" 
+      {percent < 60 && thinkingPreview && (
+        <Box
+          flexDirection="column"
+          marginBottom={1}
+          borderStyle="round"
           borderColor={THEME.dim}
           paddingX={1}
         >
           <Text color={THEME.accent} bold>Thinking & Orchestrating</Text>
-          <Text color={THEME.dim}>Analyzing workspace and orchestrating agents...</Text>
+          <Text color={THEME.dim}>{thinkingPreview}</Text>
+        </Box>
+      )}
+
+      {percent >= 60 && responsePreview && (
+        <Box
+          flexDirection="column"
+          marginBottom={1}
+          borderStyle="round"
+          borderColor={THEME.dim}
+          paddingX={1}
+        >
+          <Text color={THEME.accent} bold>Response</Text>
+          <Text color={THEME.dim}>{responsePreview}</Text>
         </Box>
       )}
 

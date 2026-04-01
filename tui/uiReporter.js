@@ -1,7 +1,7 @@
 function callHandler(handlers, key, payload) {
   const handler = handlers?.[key];
   if (typeof handler === 'function') {
-    handler(payload);
+    return handler(payload);
   }
 }
 
@@ -35,6 +35,9 @@ export function createTuiReporter(handlers = {}) {
     },
     log(payload) {
       callHandler(handlers, 'log', payload);
+    },
+    askUser(payload) {
+      return callHandler(handlers, 'askUser', payload);
     },
   };
 }

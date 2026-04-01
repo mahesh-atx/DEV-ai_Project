@@ -113,7 +113,7 @@ export function buildSmartContext(dir, userInput, modelOrBudget = 12000, message
       .map((message) => {
         const content = typeof message.content === "string"
           ? message.content
-          : JSON.stringify(message.content);
+          : String(JSON.stringify(message.content) || "");
         return `[${(message.role || "unknown").toUpperCase()}]: ${content.slice(0, 300)}${content.length > 300 ? "..." : ""}`;
       })
       .join("\n");

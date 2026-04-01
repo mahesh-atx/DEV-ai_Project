@@ -2,12 +2,19 @@
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const tuiScript = path.resolve(__dirname, '../tui-main.jsx');
+const projectRoot = path.resolve(__dirname, '..');
+const tuiScript = path.resolve(projectRoot, 'tui-main.jsx');
 
-// Use npx tsx to execute the new TUI
+const projectEnvPath = path.join(projectRoot, '.env');
+if (fs.existsSync(projectEnvPath)) {
+  const dotenv = await import('dotenv');
+  dotenv.config({ path: projectEnvPath });
+}
+
 const result = spawnSync('npx', ['tsx', tuiScript, ...process.argv.slice(2)], {
   stdio: 'inherit',
   shell: process.platform === 'win32'

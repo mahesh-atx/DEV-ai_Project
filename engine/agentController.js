@@ -4,12 +4,9 @@
  */
 
 import { runPolishAgent } from "./polishAgent.js";
-import { showSection, showToolExecution, showToolResult, logErrorToFile, createPhaseSpinner, showPhaseHeader, showSummaryCard } from "../cli-ui.js";
+import { logErrorToFile } from "../utils/errorLog.js";
 import { loadPrompt } from "../prompts/promptLoader.js";
-import chalk from "chalk";
 import os from "os";
-import fs from "fs";
-import path from "path";
 
 function emitReporter(reporter, method, payload) {
   if (reporter && typeof reporter[method] === "function") {
@@ -18,10 +15,6 @@ function emitReporter(reporter, method, payload) {
 }
 
 function makeSpinner(reporter, phase, text) {
-  if (!reporter?.silent) {
-    return createPhaseSpinner(phase, text);
-  }
-
   emitReporter(reporter, "phaseStatus", { phase, status: "start", text });
   return {
     update(nextText) {
@@ -215,11 +208,12 @@ const TOOLS_SCHEMA = [
     type: "function",
     function: {
       name: "ask_user",
-      description: "Pause execution and explicitly ask the user a clarifying question before proceeding.",
+      description: "Pause execution and explicitly ask the user a clarifying question before proceeding. Provide options for quick selection if applicable.",
       parameters: {
         type: "object",
         properties: {
-          question: { type: "string", description: "The specific question to ask the user." }
+          question: { type: "string", description: "The specific question to ask the user." },
+          options: { type: "array", items: { type: "string" }, description: "Optional list of predefined answer options for the user to select from." }
         },
         required: ["question"],
         additionalProperties: false
@@ -299,7 +293,6 @@ function getToolsForRole(role) {
   if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", ...universal].includes(t.function.name));
   if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", ...universal].includes(t.function.name));
   if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task"].includes(t.function.name));
-  // Remove 'task' tool for default non-orchestrator roles to prevent infinite recursion
   return TOOLS_SCHEMA.filter(t => t.function.name !== 'task');
 }
 
@@ -315,11 +308,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
   const startTime = Date.now();
   const phase = role === 'general' ? 'building' : role === 'explorer' ? 'exploring' : role === 'debugger' ? 'debugging' : 'coding';
   const phaseLabel = `Agent Loop [${role.toUpperCase()}]`;
-  if (reporter?.silent) {
-    emitReporter(reporter, "phaseHeader", { phase, label: phaseLabel, role });
-  } else {
-    showPhaseHeader(phase, phaseLabel);
-  }
+  emitReporter(reporter, "phaseHeader", { phase, label: phaseLabel, role });
 
   let agentMessages = [
     { role: "system", content: systemPrompt + "\n\nEnvironment Context:\n" + smartContext },
@@ -332,7 +321,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
   const MAX_LOOPS = 25;
   let totalTokens = 0;
 
-  // Execution stats for summary card
   let statsFilesCreated = 0;
   let statsFilesEdited = 0;
   let statsCommandsRun = 0;
@@ -351,7 +339,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
       currentTools = [];
     }
 
-    // STEP 1: Animated spinner while AI thinks
     const spinner = makeSpinner(reporter, phase, `Turn ${loopCount} - Thinking...`);
 
     let response;
@@ -367,7 +354,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
     if (!response) {
       spinner.stop();
       emitReporter(reporter, "log", { level: "warning", message: "Empty response." });
-      if (!reporter?.silent) console.log(chalk.yellow("  ⚠  Empty response."));
       break;
     }
 
@@ -376,7 +362,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
     if (response.content && !response.tool_calls) {
       const preview = `${response.content.slice(0, 150)}${response.content.length > 150 ? '...' : ''}`;
       emitReporter(reporter, "log", { level: "info", message: preview });
-      if (!reporter?.silent) console.log(chalk.gray(`  ${preview}`));
     }
 
     if (response.tool_calls && response.tool_calls.length > 0) {
@@ -388,7 +373,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           args = runtime.parseJSON(tc.function.arguments) || JSON.parse(tc.function.arguments);
         } catch (e) {
           emitReporter(reporter, "log", { level: "error", message: `Error parsing arguments for ${tc.function.name}` });
-          if (!reporter?.silent) console.log(chalk.red(`  Error parsing arguments for ${tc.function.name}`));
           agentMessages.push({
             role: "tool",
             tool_call_id: tc.id,
@@ -398,14 +382,10 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
         }
 
         const argsArray = Object.keys(args || {}).map(k => `${k}="${String(args[k]).substring(0, 30)}"`);
-        if (reporter?.silent) {
-          emitReporter(reporter, "toolExecution", {
-            toolName: tc.function.name,
-            args: argsArray.join(', '),
-          });
-        } else {
-          showToolExecution(tc.function.name, argsArray.join(', '));
-        }
+        emitReporter(reporter, "toolExecution", {
+          toolName: tc.function.name,
+          args: argsArray.join(', '),
+        });
 
         let toolResultStr = "";
 
@@ -415,7 +395,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                toolResultStr = `Error: write_file permission denied. In Plan mode, you may ONLY write to the '.kilo/plans/' directory with a '.md' extension.`;
                statsErrors++;
             } else {
-               runtime.patchFile(args.path, args.content, undefined, { reporter, silent: !!reporter?.silent });
+               runtime.patchFile(args.path, args.content, undefined, { reporter, silent: true });
                toolResultStr = `Successfully wrote ${args.path}`;
                statsFilesCreated++;
             }
@@ -425,13 +405,13 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                toolResultStr = `Error: edit_file permission denied in Plan mode. You must only create new files in '.kilo/plans/' using write_file.`;
                statsErrors++;
             } else {
-               runtime.patchFile(args.path, null, args.edits, { reporter, silent: !!reporter?.silent });
+               runtime.patchFile(args.path, null, args.edits, { reporter, silent: true });
                toolResultStr = `Successfully edited ${args.path}`;
                statsFilesEdited++;
             }
           }
           else if (tc.function.name === "run_command") {
-            const output = await runtime.runCommand(args.command, args.cwd, { reporter, silent: !!reporter?.silent });
+            const output = await runtime.runCommand(args.command, args.cwd, { reporter, silent: true });
             statsCommandsRun++;
 
             if (output && typeof output.logs === 'string') {
@@ -482,7 +462,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
             isFinished = true;
             toolResultStr = "Task finished successfully.";
             emitReporter(reporter, "log", { level: "success", message: `Task complete: ${args.message}` });
-            if (!reporter?.silent) console.log(chalk.green(`\n  ✔ Task complete: ${args.message}`));
           }
           else if (tc.function.name === "plan_exit") {
             finalMessage = Object.assign({}, response, {
@@ -491,18 +470,16 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
             isFinished = true;
             toolResultStr = "Plan finished successfully.";
             emitReporter(reporter, "log", { level: "success", message: "Plan phase complete." });
-            if (!reporter?.silent) console.log(chalk.green(`\n  ✔ Plan phase complete.`));
           }
           else if (tc.function.name === "ask_user") {
-            const inquirer = (await import("inquirer")).default;
-            emitReporter(reporter, "log", { level: "info", message: `Agent asks: ${args.question}` });
-            if (!reporter?.silent) console.log(`\n🤖 ` + chalk.cyan.bold("Agent asks:") + ` ${args.question}`);
-            const ans = await inquirer.prompt([{
-               type: 'input',
-               name: 'reply',
-               message: chalk.yellow("Your reply:")
-            }]);
-            toolResultStr = ans.reply;
+            const questionOptions = Array.isArray(args.options) ? args.options : [];
+            if (typeof reporter?.askUser === 'function') {
+              emitReporter(reporter, "log", { level: "info", message: `Agent asks: ${args.question}` });
+              toolResultStr = await reporter.askUser({ question: args.question, options: questionOptions });
+            } else {
+              toolResultStr = `Error: ask_user requires a TUI reporter with askUser handler.`;
+              statsErrors++;
+            }
           }
           else if (tc.function.name === "websearch") {
             const { websearch } = await import("../utils/webTools.js");
@@ -518,10 +495,6 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           }
           else if (tc.function.name === "task") {
             emitReporter(reporter, "log", { level: "info", message: `Delegating ${args.subagent_type}: ${args.description}` });
-            if (!reporter?.silent) {
-              console.log(chalk.magenta(`\n  [TASK DELEGATION] Spawning sub-agent: ${args.subagent_type}`));
-              console.log(chalk.magenta(`    ↳ ${args.description} | ID: ${args.task_id || 'N/A'}`));
-            }
             
             const subResult = await runAgentPipeline(
                `[ORCHESTRATOR DELEGATION]: ${args.description}\n\nTask Prompt:\n${args.prompt}`, 
@@ -532,34 +505,25 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
             
             toolResultStr = `<task_result task_id="${args.task_id || ''}">\n\nSub-Agent Completed.\nFinal Output:\n${subResult.finalMessage?.content || "No output"}\n\n</task_result>`;
             emitReporter(reporter, "log", { level: "success", message: `Delegation finished: ${args.description}` });
-            if (!reporter?.silent) console.log(chalk.magenta(`  [TASK DELEGATION] Sub-agent finished: ${args.description}`));
           }
           else if (tc.function.name === "delegate_task") {
             emitReporter(reporter, "log", { level: "info", message: "Delegating explorer task..." });
-            if (!reporter?.silent) console.log(chalk.magenta(`\n  [DELEGATE] Spawning sub-agent (explorer)...`));
             const subResult = await runAgentPipeline(args.task, smartContext, runtime, { role: "explorer", reporter });
             toolResultStr = `Sub-agent completed task.\n\nFinal Report:\n${subResult.finalMessage?.content || "No output"}`;
             emitReporter(reporter, "log", { level: "success", message: "Explorer task finished." });
-            if (!reporter?.silent) console.log(chalk.magenta(`  [DELEGATE] Sub-agent finished.`));
           } else {
             toolResultStr = `Error: Unknown tool ${tc.function.name}`;
           }
         } catch (err) {
           emitReporter(reporter, "log", { level: "error", message: `Error running tool ${tc.function.name}: ${err.message}` });
-          if (!reporter?.silent) console.log(chalk.red(`    Error running tool: ${err.message}`));
           toolResultStr = `Error executing tool: ${err.message}`;
           statsErrors++;
         }
 
-        // STEP 2: Collapsed tool result
-        if (reporter?.silent) {
-          emitReporter(reporter, "toolResult", {
-            toolName: tc.function.name,
-            text: previewToolResult(toolResultStr),
-          });
-        } else {
-          showToolResult(toolResultStr);
-        }
+        emitReporter(reporter, "toolResult", {
+          toolName: tc.function.name,
+          text: previewToolResult(toolResultStr),
+        });
 
         agentMessages.push({
           role: "tool",
@@ -575,13 +539,10 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
 
   if (loopCount >= MAX_LOOPS) {
     emitReporter(reporter, "log", { level: "error", message: `Max loop count reached (${MAX_LOOPS}).` });
-    if (!reporter?.silent) console.log(chalk.red(`\n  ✗ Max loop count reached (${MAX_LOOPS}).`));
   }
 
-  // STEP 5.5: Auto-polish pass (if enabled)
   if (options.autoPolish && runtime.buildFreshContext) {
     emitReporter(reporter, "log", { level: "info", message: "Running auto-polish pass..." });
-    if (!reporter?.silent) console.log(chalk.bold.magenta("\n  [AUTO-POLISH] 🎨 Running polish pass..."));
     try {
       const polishContext = runtime.buildFreshContext("improve code quality UI UX polish");
       const polishRuntime = {
@@ -595,34 +556,30 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
         },
         parseJSON: runtime.parseJSON,
         reporter,
-        silent: !!reporter?.silent,
+        silent: true,
       };
       const polishResult = await runPolishAgent(polishContext, polishRuntime);
       if (polishResult && polishResult.files) {
         emitReporter(reporter, "log", { level: "success", message: `Auto-polish improved ${polishResult.files.length} file(s)` });
-        if (!reporter?.silent) console.log(chalk.green(`  ✔ Auto-polish: ${polishResult.files.length} file(s) improved`));
         for (const f of polishResult.files) {
           if (!f.path) continue;
           if (f.edits && Array.isArray(f.edits)) {
-            runtime.patchFile(f.path, null, f.edits, { reporter, silent: !!reporter?.silent });
+            runtime.patchFile(f.path, null, f.edits, { reporter, silent: true });
           } else if (typeof f.content === "string") {
-            runtime.patchFile(f.path, f.content, undefined, { reporter, silent: !!reporter?.silent });
+            runtime.patchFile(f.path, f.content, undefined, { reporter, silent: true });
           }
         }
       } else {
         emitReporter(reporter, "log", { level: "info", message: "Auto-polish found no improvements." });
-        if (!reporter?.silent) console.log(chalk.gray("  ℹ Auto-polish: No improvements needed."));
       }
     } catch (err) {
       emitReporter(reporter, "log", { level: "warning", message: `Auto-polish failed: ${err.message}` });
-      if (!reporter?.silent) console.log(chalk.yellow(`  ⚠ Auto-polish failed: ${err.message}`));
       logErrorToFile(err, "Auto-Polish");
     }
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
-  // STEP 6: Summary card
   const summary = {
     filesCreated: statsFilesCreated,
     filesEdited: statsFilesEdited,
@@ -632,11 +589,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
     loopCount,
   };
 
-  if (reporter?.silent) {
-    emitReporter(reporter, "summary", summary);
-  } else {
-    showSummaryCard(summary);
-  }
+  emitReporter(reporter, "summary", summary);
 
   return { finalMessage, totalTokens };
 }

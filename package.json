@@ -7,11 +7,9 @@
     "devai": "./bin/devai.js"
   },
   "scripts": {
-    "devai": "node devai.js",
-    "chat": "node chat.js",
-    "tui": "npx tsx tui-main.jsx",
-    "test": "node test_all.js && node test_command_executor.js",
-    "test:live": "node test_all.js --live"
+    "devai": "node bin/devai.js",
+    "devai:bin": "node bin/devai-test.js",
+    "devai:direct": "npx tsx tui-main.jsx"
   },
   "dependencies": {
     "boxen": "^8.0.1",
