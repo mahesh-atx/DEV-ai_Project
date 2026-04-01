@@ -3,8 +3,6 @@
  * All available AI models and their configurations.
  */
 
-import { getApiKey } from '../utils/configManager.js';
-
 const MODELS = {
   // 🧠 Kimi (Long context + reasoning)
   kimi: {
@@ -229,13 +227,10 @@ export function getModel(key) {
   const model = MODELS[key];
   if (!model) throw new Error(`Unknown model key: ${key}`);
 
-  let apiKey = process.env[model.envKey];
-  if (!apiKey) {
-    apiKey = getApiKey();
-  }
+  const apiKey = process.env[model.envKey];
   if (!apiKey) {
     throw new Error(
-      `Missing API key: Set ${model.envKey} in your .env file or run 'devai' to configure it.`
+      `Missing API key: Set ${model.envKey} in your .env file`
     );
   }
 

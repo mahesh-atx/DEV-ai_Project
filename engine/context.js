@@ -114,7 +114,7 @@ export function buildSmartContext(dir, userInput, modelOrBudget = 12000, message
         const content = typeof message.content === "string"
           ? message.content
           : JSON.stringify(message.content);
-        return `[${message.role.toUpperCase()}]: ${content.slice(0, 300)}${content.length > 300 ? "..." : ""}`;
+        return `[${(message.role || "unknown").toUpperCase()}]: ${content.slice(0, 300)}${content.length > 300 ? "..." : ""}`;
       })
       .join("\n");
     if (recent) context += `\nRecent History:\n${recent}\n\n`;
