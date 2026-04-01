@@ -4,6 +4,9 @@ import TextInput from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import stringWidth from 'string-width';
 import StreamingPanel from './StreamingPanel.jsx';
+import PlanFollowupSelect from './PlanFollowupSelect.jsx';
+import PlanProgress from './PlanProgress.jsx';
+import PlanText from './PlanText.jsx';
 import { MODES, THEME } from '../constants.js';
 import { createTuiReporter } from '../uiReporter.js';
 import { createClient } from '../../config/apiClient.js';
@@ -21,6 +24,18 @@ const DEFAULT_SUMMARY = {
 
 function stripAnsi(text) {
   return String(text || '').replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function stripSystemAndEnv(text) {
+  return String(text || '')
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\n?/g, '')
+    .replace(/<environment_details>[\s\S]*?<\/environment_details>\n?/g, '')
+    .replace(/<environment_details>[\s\S]*$/g, '')
+    .replace(/Implement the plan above\.\s*$/gm, '')
+    .replace(/^\s*Current time:.*$/gm, '')
+    .replace(/^\s*---\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function truncate(text, max = 96) {
@@ -146,6 +161,23 @@ const ChatScreen = ({ mode, model, onExit }) => {
   // ask_user tool state
   const [pendingQuestion, setPendingQuestion] = useState(null);
   const questionResolverRef = useRef(null);
+
+  // Plan followup state
+  const [planFollowup, setPlanFollowup] = useState(null);
+  const planFollowupResolverRef = useRef(null);
+
+  // Plan progress state
+  const [planProgress, setPlanProgress] = useState(null);
+  const planToolCountRef = useRef(0);
+  const planFilesExploredRef = useRef(0);
+  const planQuestionsAskedRef = useRef(0);
+
+  // Sync plan progress elapsed time with stream timer
+  useEffect(() => {
+    if (planProgress && isThinkingRef.current) {
+      setPlanProgress(prev => prev ? { ...prev, elapsed: streamElapsed } : null);
+    }
+  }, [streamElapsed]);
 
   const startTimeRef = useRef(null);
   const timerRef = useRef(null);
@@ -334,14 +366,50 @@ const ChatScreen = ({ mode, model, onExit }) => {
     phaseHeader: ({ label }) => {
       setStreamLabel(label || `${activeMode.label} running`);
       pushActivity('status', label || `${activeMode.label} running`);
+      if (activeMode.value === 'planner') {
+        planToolCountRef.current = 0;
+        planFilesExploredRef.current = 0;
+        planQuestionsAskedRef.current = 0;
+        setPlanProgress({ currentPhase: 'explore', percent: 0, filesExplored: 0, questionsAsked: 0, toolsUsed: 0, elapsed: streamElapsed, phaseStatus: 'Starting exploration...' });
+      }
     },
     phaseStatus: ({ status, text }) => {
       if (text) setStreamLabel(text);
       if (status === 'error') pushActivity('error', text || 'Phase failed');
       if (status === 'success') pushActivity('success', text || 'Phase finished');
+      // Update plan progress based on phase status text
+      if (activeMode.value === 'planner' && text) {
+        setPlanProgress(prev => {
+          if (!prev) return prev;
+          const lower = text.toLowerCase();
+          let phase = prev.currentPhase;
+          let pct = prev.percent;
+          if (lower.includes('explor') || lower.includes('read_file') || lower.includes('search') || lower.includes('list_file')) { phase = 'explore'; pct = Math.min(35, pct + 2); }
+          else if (lower.includes('design') || lower.includes('approach')) { phase = 'design'; pct = Math.min(55, pct + 3); }
+          else if (lower.includes('review') || lower.includes('verify')) { phase = 'review'; pct = Math.min(75, pct + 3); }
+          else if (lower.includes('write') || lower.includes('plan') || lower.includes('writing')) { phase = 'write'; pct = Math.min(95, pct + 2); }
+          else if (lower.includes('complete') || lower.includes('done') || lower.includes('finish')) { phase = 'done'; pct = 100; }
+          return { ...prev, currentPhase: phase, percent: pct, phaseStatus: text };
+        });
+      }
     },
     toolExecution: ({ toolName, args }) => {
       pushActivity('tool', `${toolName}${args ? ` -> ${args}` : ''}`);
+      if (activeMode.value === 'planner') {
+        planToolCountRef.current++;
+        if (toolName === 'read_file') planFilesExploredRef.current++;
+        if (toolName === 'ask_user') planQuestionsAskedRef.current++;
+        setPlanProgress(prev => {
+          if (!prev) return prev;
+          const tools = planToolCountRef.current;
+          const pct = Math.min(90, 5 + tools * 3);
+          let phase = prev.currentPhase;
+          if (['list_files', 'search_files', 'search_content', 'read_file'].includes(toolName)) phase = 'explore';
+          else if (toolName === 'write_file') phase = 'write';
+          else if (toolName === 'ask_user') phase = 'review';
+          return { ...prev, currentPhase: phase, percent: pct, toolsUsed: tools, filesExplored: planFilesExploredRef.current, questionsAsked: planQuestionsAskedRef.current, elapsed: streamElapsed, phaseStatus: `Using ${toolName}...` };
+        });
+      }
     },
     toolResult: ({ text }) => {
       pushActivity('status', text);
@@ -363,10 +431,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
     log: ({ level, message }) => {
       pushActivity(level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'status', message);
     },
-    askUser: ({ question }) => {
+    askUser: ({ question, options }) => {
       return new Promise((resolve) => {
-        pushActivity('status', `Agent asks: ${question}`);
-        setPendingQuestion(question);
+        // Build display text: question + numbered options
+        let displayText = question;
+        if (options && options.length > 0) {
+          displayText = question + '\n\n' + options.map((opt, i) => `[${i + 1}] ${opt}`).join('\n');
+        }
+        setPendingQuestion({ question: displayText, options: options || [] });
         questionResolverRef.current = resolve;
       });
     },
@@ -745,13 +817,15 @@ const ChatScreen = ({ mode, model, onExit }) => {
         const planDir = path.join(projectDir, '.kilo', 'plans');
         if (!fs.existsSync(planDir)) fs.mkdirSync(planDir, { recursive: true });
         const planFile = path.join(planDir, `${new Date().toISOString().replace(/[:.]/g, '-')}-plan.md`);
-        const reminder = `\n\n<system-reminder>\nPlan Mode: Write the final plan only to ${planFile}\nCall plan_exit when finished.\n</system-reminder>\n`;
+        const planFileRelative = path.relative(projectDir, planFile);
+        const reminder = `\n\n<system-reminder>\nPlan file path: ${planFileRelative}\nThis is the ONLY file you may write to or edit. Write your complete plan to this file using write_file, then call plan_exit.\n</system-reminder>\n`;
         execResult = await runAgentPipeline(query + reminder, smartContext, runtime, {
           autoPolish: false,
           role,
           reporter,
+          extraContext: { planFile: planFileRelative },
         });
-        pushActivity('status', `Plan file prepared at ${planFile}`);
+        pushActivity('status', `Plan generated at ${planFileRelative}`);
       } else {
         execResult = await runAgentPipeline(query, smartContext, runtime, {
           autoPolish: activeMode.value === 'polish',
@@ -766,11 +840,93 @@ const ChatScreen = ({ mode, model, onExit }) => {
         return { type: 'system', text: 'Agent pipeline produced no output.', id: nextId() };
       }
 
+      let resultText = typeof execResult.finalMessage.content === 'string'
+        ? execResult.finalMessage.content
+        : 'Agent pipeline completed.';
+
+      // In planner mode, save the plan file and trigger PlanFollowup
+      if (activeMode.value === 'planner') {
+        const planDir = path.join(projectDir, '.kilo', 'plans');
+        if (!fs.existsSync(planDir)) fs.mkdirSync(planDir, { recursive: true });
+        const planFile = path.join(planDir, `${new Date().toISOString().replace(/[:.]/g, '-')}-plan.md`);
+
+        // Try to read the plan file first (AI wrote it via write_file), fall back to streamed text
+        let planContent = resultText;
+        let actualPlanFile = null;
+        try {
+          const planFiles = fs.readdirSync(planDir)
+            .filter(f => f.endsWith('.md'))
+            .map(f => ({ name: f, path: path.join(planDir, f), mtime: fs.statSync(path.join(planDir, f)).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime);
+          if (planFiles.length > 0) {
+            actualPlanFile = planFiles[0].path;
+            planContent = fs.readFileSync(planFiles[0].path, 'utf8');
+          }
+        } catch (e) {
+          // no existing plan file
+        }
+
+        // Save to the new timestamp file
+        fs.writeFileSync(planFile, planContent, 'utf8');
+        const savedPlanFile = actualPlanFile || planFile;
+
+        // Clean plan content: strip system-reminder, environment_details, implementation prompt
+        const cleanPlanContent = stripSystemAndEnv(planContent);
+
+        const planFileRelative = path.relative(projectDir, savedPlanFile);
+
+        // Show PlanFollowup SelectInput panel
+        setPlanProgress(prev => prev ? { ...prev, currentPhase: 'done', percent: 100, phaseStatus: 'Plan complete' } : null);
+        setPlanFollowup({ planFile: planFileRelative, planContent: cleanPlanContent });
+        const action = await new Promise((resolve) => {
+          planFollowupResolverRef.current = resolve;
+        });
+
+        setPlanFollowup(null);
+        setPlanProgress(null);
+        setPlanProgress(null);
+
+        if (action === 'implement') {
+          return {
+            type: 'assistant',
+            text: `## Plan: ${path.basename(planFile)}\n\n${cleanPlanContent}\n\n---\n\nImplement the plan above.`,
+            id: nextId(),
+            planFollowup: 'implement',
+          };
+        }
+
+        if (action === 'new_session') {
+          const { generateHandover } = await import('../../engine/planFollowup.js');
+          const handover = await generateHandover(msgHistory, runtime.callAI, runtime.modelConfig);
+          return {
+            type: 'assistant',
+            text: `## Plan: ${path.basename(planFile)}\n\n${cleanPlanContent}\n\n${handover ? `\n\n## Handover\n\n${handover}` : ''}\n\n---\n\nPlan saved. Start a new session to implement.`,
+            id: nextId(),
+            planFollowup: 'new_session',
+            handoverText: handover,
+          };
+        }
+
+        if (action === 'revise') {
+          return {
+            type: 'assistant',
+            text: `## Plan: ${path.basename(planFile)}\n\n${cleanPlanContent}\n\n---\n\nPlease revise the plan based on my feedback.`,
+            id: nextId(),
+            planFollowup: 'revise',
+          };
+        }
+
+        return {
+          type: 'assistant',
+          text: `## Plan: ${path.basename(planFile)}\n\n${cleanPlanContent}`,
+          id: nextId(),
+          planFollowup: 'dismissed',
+        };
+      }
+
       return {
         type: 'assistant',
-        text: typeof execResult.finalMessage.content === 'string'
-          ? execResult.finalMessage.content
-          : 'Agent pipeline completed.',
+        text: resultText,
         id: nextId(),
       };
     } catch (error) {
@@ -808,6 +964,37 @@ const ChatScreen = ({ mode, model, onExit }) => {
           resultMsg = await runAskMode(query, msgSnapshot);
           break;
       }
+
+      // Handle plan followup: if user chose "Implement in this session", auto-continue
+      if (resultMsg?.planFollowup === 'implement') {
+        setMessages((previous) => [...previous, resultMsg]);
+        setMsgCount((count) => count + 1);
+
+        const implMode = { ...activeMode, label: 'Code', value: 'agent' };
+        const implReporter = buildReporter(implMode);
+        const modeSwitchReminder = `<system-reminder>
+Your operational mode has changed from plan to code.
+You are no longer in read-only mode.
+You are permitted to make file changes, run shell commands, and utilize your arsenal of tools as needed.
+</system-reminder>
+
+<environment_details>
+Current time: ${new Date().toISOString()}
+</environment_details>
+
+Implement the plan above.`;
+        const implResult = await runAgentMode(modeSwitchReminder, [...msgSnapshot, resultMsg], implMode, implReporter);
+        resultMsg = implResult;
+      }
+
+      // Handle plan followup: if user chose "Revise plan", re-enter plan mode
+      if (resultMsg?.planFollowup === 'revise') {
+        setMessages((previous) => [...previous, resultMsg]);
+        setMsgCount((count) => count + 1);
+
+        const reviseResult = await runAgentMode(resultMsg.text, [...msgSnapshot, resultMsg], activeMode, reporter);
+        resultMsg = reviseResult;
+      }
     } catch (error) {
       resultMsg = { type: 'system', text: `Error: ${error.message}`, id: nextId() };
       updateSummary({ errors: (currentSummaryRef.current.errors || 0) + 1 });
@@ -835,6 +1022,22 @@ const ChatScreen = ({ mode, model, onExit }) => {
     if (pendingQuestion && questionResolverRef.current) {
       const trimmed = value.trim();
       if (!trimmed) return;
+
+      // If numbered option, resolve with the option text
+      const options = typeof pendingQuestion === 'object' && pendingQuestion.options ? pendingQuestion.options : [];
+      const optionMatch = trimmed.match(/^(\d+)$/);
+      if (optionMatch && options.length > 0) {
+        const idx = parseInt(optionMatch[1], 10) - 1;
+        if (idx >= 0 && idx < options.length) {
+          setMessages((previous) => [...previous, { type: 'user', text: options[idx], id: nextId() }]);
+          const resolver = questionResolverRef.current;
+          questionResolverRef.current = null;
+          setPendingQuestion(null);
+          setInput('');
+          resolver(options[idx]);
+          return;
+        }
+      }
 
       // Add the response to chat history
       setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
@@ -1033,20 +1236,38 @@ const ChatScreen = ({ mode, model, onExit }) => {
           { text: `╰${'─'.repeat(contentMaxLen + 2)}╯`, color: THEME.dim }
         ]});
       } else {
-        lines.push({ text: 'DevAI', color: THEME.accent, bold: true });
+        const isPlanMsg = msg.planFollowup && msg.planFollowup !== 'none';
         
-        const wrapped = wrapText(msg.text, maxLineWidth);
-        let inCodeBlock = false;
-
-        wrapped.forEach(l => {
-          if (l.trim().startsWith('```')) {
-            inCodeBlock = !inCodeBlock;
-            lines.push({ text: l, color: THEME.dim }); // Style the backticks
-          } else {
-            // Syntax Highlight: Yellow if inside code block, normal otherwise
-            lines.push({ text: l, color: inCodeBlock ? '#E5C07B' : THEME.text }); 
+        if (isPlanMsg) {
+          const planContent = msg.text.replace(/^## Plan: .*\n\n/, '').replace(/\n\n---\n\n[\s\S]*$/, '').trim();
+          lines.push({ text: '✓ PLAN COMPLETE', color: THEME.warning, bold: true });
+          lines.push({ text: '═'.repeat(Math.min('✓ PLAN COMPLETE'.length, maxLineWidth)), color: THEME.warning });
+          lines.push({ type: 'plan', content: planContent });
+          if (msg.planFollowup === 'implement') {
+            lines.push({ text: '', empty: true });
+            lines.push({ text: '→ Implementing in this session...', color: THEME.accent });
+          } else if (msg.planFollowup === 'new_session') {
+            lines.push({ text: '', empty: true });
+            lines.push({ text: '✦ Plan saved. Start a new session to implement.', color: THEME.dim });
+          } else if (msg.planFollowup === 'dismissed') {
+            lines.push({ text: '', empty: true });
+            lines.push({ text: '✕ Plan saved.', color: THEME.dim });
           }
-        });
+        } else {
+          lines.push({ text: 'DevAI', color: THEME.accent, bold: true });
+          
+          const wrapped = wrapText(msg.text, maxLineWidth);
+          let inCodeBlock = false;
+
+          wrapped.forEach(l => {
+            if (l.trim().startsWith('```')) {
+              inCodeBlock = !inCodeBlock;
+              lines.push({ text: l, color: THEME.dim });
+            } else {
+              lines.push({ text: l, color: inCodeBlock ? '#E5C07B' : THEME.text }); 
+            }
+          });
+        }
       }
       lines.push({ text: '', empty: true });
     });
@@ -1125,7 +1346,11 @@ const ChatScreen = ({ mode, model, onExit }) => {
             {/* Flat Line Renderer */}
             {visibleLines.map((line, index) => (
               <Box key={index} marginBottom={0} flexDirection="row">
-                {line.parts ? (
+                {line.type === 'plan' ? (
+                  <Box flexDirection="column" width="100%">
+                    <PlanText text={line.content} maxWidth={maxLineWidth - 2} />
+                  </Box>
+                ) : line.parts ? (
                   line.parts.map((p, i) => (
                     <Text key={i} color={p.color} bold={p.bold}>{p.text}</Text>
                   ))
@@ -1135,7 +1360,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
               </Box>
             ))}
 
-            {isThinking && (
+            {isThinking && mode.value === 'planner' && planProgress && (
+              <Box flexDirection="column" marginBottom={1} marginTop={1}>
+                <Text color={THEME.accent} bold>{THINKING_FRAMES[thinkFrame]} DevAI — Planning</Text>
+                <PlanProgress {...planProgress} />
+              </Box>
+            )}
+
+            {isThinking && mode.value !== 'planner' && (
               <Box flexDirection="column" marginBottom={1} marginTop={1}>
                 <Text color={THEME.accent} bold>{THINKING_FRAMES[thinkFrame]} DevAI</Text>
                 <StreamingPanel
@@ -1187,8 +1419,42 @@ const ChatScreen = ({ mode, model, onExit }) => {
           {pendingQuestion && (
             <Box flexDirection="column" borderStyle="round" borderColor={THEME.warning} paddingX={1} marginX={1} marginBottom={1}>
               <Text color={THEME.warning} bold>Agent asks:</Text>
-              <Text color={THEME.text}>{pendingQuestion}</Text>
-              <Text color={THEME.dim}>Type your answer and press Enter</Text>
+              <Box flexDirection="column">
+                {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => (
+                  <Text key={i} color={line.startsWith('[') ? THEME.accent : THEME.text}>{line}</Text>
+                ))}
+              </Box>
+              <Text color={THEME.dim}>Type a number or your answer, then press Enter</Text>
+            </Box>
+          )}
+
+          {planFollowup && (
+            <Box flexDirection="column" marginX={1} marginBottom={1}>
+              <PlanFollowupSelect
+                planFile={planFollowup.planFile}
+                onSelect={(action) => {
+                  if (planFollowupResolverRef.current) {
+                    const resolver = planFollowupResolverRef.current;
+                    planFollowupResolverRef.current = null;
+                    resolver(action);
+                  }
+                }}
+              />
+            </Box>
+          )}
+
+          {planFollowup && (
+            <Box flexDirection="column" marginX={1} marginBottom={1}>
+              <PlanFollowupSelect
+                planFile={planFollowup.planFile}
+                onSelect={(action) => {
+                  if (planFollowupResolverRef.current) {
+                    const resolver = planFollowupResolverRef.current;
+                    planFollowupResolverRef.current = null;
+                    resolver(action);
+                  }
+                }}
+              />
             </Box>
           )}
 
@@ -1260,6 +1526,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
           <Box marginBottom={1}>
             <Text color={THEME.border}>{'-'.repeat(colRight - 2)}</Text>
           </Box>
+
+          {planFollowup && planFollowup.planFile && (
+            <Box flexDirection="column" marginBottom={1}>
+              <Text color={THEME.accent} bold>PLAN FILE</Text>
+              <Text color={THEME.text}>  {planFollowup.planFile}</Text>
+            </Box>
+          )}
 
           <Box marginBottom={1}>
             <Text color={THEME.accent} bold>STREAM</Text>

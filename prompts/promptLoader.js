@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export function loadPrompt(role, modelConfig = {}) {
+export function loadPrompt(role, modelConfig = {}, extraContext = {}) {
   const baseRulesPath = path.join(__dirname, 'base_rules.txt');
   const rolePath = path.join(__dirname, `${role}.txt`);
   
@@ -27,18 +27,12 @@ export function loadPrompt(role, modelConfig = {}) {
 
   const osInfo = `Operating System: ${os.platform()} (${os.release()}).\nIf on Windows, use 'dir' instead of 'ls', and 'python' or 'py' instead of 'python3'.`;
 
-  let finalPrompt = `${rolePrompt}\n\n${baseRules}\n\n${osInfo}`;
-
-  // If top-tier capability model or explicit override, inject BEAST mode (only if not strictly planner JSON mode)
-  const modelId = modelConfig.id ? modelConfig.id.toLowerCase() : "";
-  const isCapable = modelId.includes("gpt-") || modelId.includes("o1") || modelId.includes("o3") || modelId.includes("gemini-") || modelId.includes("claude-3-5");
-  
-  if (role !== "planner" && isCapable) {
-    try {
-      const beastRules = fs.readFileSync(path.join(__dirname, 'beast.txt'), 'utf8');
-      finalPrompt += `\n\n${beastRules}`;
-    } catch(e) {} // beast.txt is optional — only available for capable models
+  // Replace placeholders in rolePrompt with extraContext values
+  if (extraContext.planFile) {
+    rolePrompt = rolePrompt.replace(/\{planFile\}/g, extraContext.planFile);
   }
+
+  let finalPrompt = `${rolePrompt}\n\n${baseRules}\n\n${osInfo}`;
 
   return finalPrompt;
 }

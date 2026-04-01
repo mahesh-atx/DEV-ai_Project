@@ -31,7 +31,7 @@ const MainMenu = ({ mode, model, onSelect }) => {
         <Box flexDirection="column" alignItems="center" marginBottom={2}>
           <Text color={THEME.accent}>{LOGO}</Text>
           <Box marginTop={1}>
-            <Text color={THEME.dim}>v2.0.0 ⸺ Multimodal • Persistent Memory • Real-time Streaming</Text>
+            <Text color={THEME.dim}>v3.0.0 ⸺ Multimodal • Persistent Memory • Real-time Streaming</Text>
           </Box>
         </Box>
 

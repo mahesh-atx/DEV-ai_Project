@@ -57,7 +57,7 @@ export const PROMPTS = {
   explorer: `You are an Expert Codebase Explorer.\nYour goal is to aggressively search the codebase, read files, and output a detailed context architecture report. You cannot edit code.\n${BASE_RULES}`,
   coder: `You are an Elite Implementation Coder.\nYour goal is to execute specific file creations and edits cleanly based on the orchestrator's plan. You should not test code.\n${BASE_RULES}`,
   debugger: `You are a strict QA and Verification Debugger.\nYour goal is to run terminal tests, compile the codebase, analyze errors, and verify the work. You do not edit code.\n${BASE_RULES}`,
-  plan: `You are a Lead AI Systems Architect meticulously operating in Plan Mode.\nYour objective is exclusively to explore the codebase and write a comprehensive plan markdown file.\nYou operate in a strict read-only execution environment. You MUST NOT edit source code files or run terminal shell commands.\n\nYour 5-Phase Planning Workflow:\n1. Initial Understanding: Explore the codebase natively.\n2. Design: Formulate a solution.\n3. Review: Verify architectural feasibility.\n4. Final Plan: Write the plan EXCLUSIVELY to your designated plan file (in .kilo/plans/).\n5. Completion: Call the 'plan_exit' tool to signal the user.\n${BASE_RULES}`
+  plan: `You are a Lead AI Systems Architect meticulously operating in Plan Mode.\nYour objective is exclusively to explore the codebase and produce a comprehensive plan.\nYou operate in a strict read-only execution environment. You MUST NOT edit source code files or run terminal shell commands.\n\nYour 4-Phase Planning Workflow:\n1. Initial Understanding: Explore the codebase natively using list_files, search_files, search_content, and read_file.\n2. Design: Formulate a solution architecture.\n3. Review: Verify architectural feasibility.\n4. Final Plan: Respond with the complete plan as your text response (markdown format). The system will automatically save it to a .md file. Then call 'plan_exit' to signal completion.\n\nIMPORTANT: Do NOT use write_file to create the plan. Simply respond with the full plan text as your message content. The system handles file saving automatically.\n${BASE_RULES}`
 };
 
 const TOOLS_SCHEMA = [
@@ -302,7 +302,8 @@ function getToolsForRole(role) {
 export async function runAgentPipeline(userInput, smartContext, runtime, options = {}) {
   const role = options.role || "general";
   const reporter = options.reporter || runtime.reporter || null;
-  const systemPrompt = loadPrompt(role, runtime.modelConfig || {});
+  const extraContext = options.extraContext || {};
+  const systemPrompt = loadPrompt(role, runtime.modelConfig || {}, extraContext);
   const activeTools = getToolsForRole(role);
 
   const startTime = Date.now();
@@ -465,7 +466,9 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           }
           else if (tc.function.name === "plan_exit") {
             finalMessage = Object.assign({}, response, {
-               content: response.content ? `${response.content}\n\nTask Finished: Plan completed.` : `Task Finished: Plan completed.`
+               content: response.content && response.content.trim().length > 10
+                 ? response.content
+                 : `Plan completed. The full plan has been generated and saved.`
             });
             isFinished = true;
             toolResultStr = "Plan finished successfully.";
