@@ -15,7 +15,7 @@ import {
   findLatestVisibleCollapsibleId,
 } from './chatUtils.js';
 
-const ChatScreen = ({ mode, model, onExit }) => {
+const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], onModeChange, onModelChange, onExit }) => {
   const {
     dims,
     messages,
@@ -24,6 +24,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
     elapsedTime,
     showQuestions,
     showShortcuts,
+    pickerState,
+    handlePickerSelect,
     followLive,
     scrollOffset,
     setScrollOffset,
@@ -43,7 +45,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     toggleLatestCollapsible,
     setShowQuestions,
     pushActivity,
-  } = useChatState({ mode, model, onExit });
+  } = useChatState({ mode, model, availableModes, availableModels, onModeChange, onModelChange, onExit });
 
   const handleQuestionSelect = useCallback((item) => {
     setShowQuestions(false);
@@ -61,6 +63,18 @@ const ChatScreen = ({ mode, model, onExit }) => {
     items.push({ label: '<- Back to typing (Esc)', value: 'CANCEL', key: 'cancel' });
     return items;
   }, [messages]);
+
+  const pickerItems = useMemo(() => {
+    if (!pickerState) return [];
+    const items = (pickerState.items || []).map((item, index) => ({
+      label: item.label,
+      value: item.value,
+      key: item.key || `${pickerState.type}-${index}`,
+      payload: item.payload,
+    }));
+    items.push({ label: '<- Back to chat (Esc)', value: 'CANCEL', key: `${pickerState.type}-cancel` });
+    return items;
+  }, [pickerState]);
 
   const spinnerFrame = SPINNER_FRAMES[liveTick % SPINNER_FRAMES.length];
   const showStreamingCursor = liveTick % 2 === 0;
@@ -81,7 +95,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
     'PgUp/PgDn: faster scroll',
     'Home/End: oldest or live tail',
     'Ctrl+Q: history',
-    '/build, /git <msg>, undo',
+    '/mode, /model, /build',
+    '/git <msg>, undo',
   ];
   const activeToolEntryId = useMemo(() => (
     isThinking ? findLatestLiveToolEntryId(activityLog) : null
@@ -241,6 +256,24 @@ const ChatScreen = ({ mode, model, onExit }) => {
             <SelectInput
               items={questionItems}
               onSelect={handleQuestionSelect}
+              indicatorComponent={({ isSelected }) => <Text color={isSelected ? COLORS.blue : COLORS.dim}>{isSelected ? '> ' : '  '}</Text>}
+              itemComponent={({ isSelected, label }) => <Text color={isSelected ? COLORS.white : COLORS.dim} bold={isSelected}>{label}</Text>}
+            />
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (pickerState) {
+    return (
+      <Box flexDirection="column" height={dims.rows} width="100%" alignItems="center" justifyContent="center" paddingX={1}>
+        <Box borderStyle="round" borderColor={COLORS.dim} padding={2} flexDirection="column" width={72}>
+          <Text color={COLORS.blue} bold marginBottom={1}>{pickerState.title || 'Select an option'}</Text>
+          <Box flexDirection="column" paddingX={2}>
+            <SelectInput
+              items={pickerItems}
+              onSelect={handlePickerSelect}
               indicatorComponent={({ isSelected }) => <Text color={isSelected ? COLORS.blue : COLORS.dim}>{isSelected ? '> ' : '  '}</Text>}
               itemComponent={({ isSelected, label }) => <Text color={isSelected ? COLORS.white : COLORS.dim} bold={isSelected}>{label}</Text>}
             />

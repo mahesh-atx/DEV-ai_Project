@@ -3,6 +3,7 @@ import { useStdout, useInput } from 'ink';
 import { MODES } from '../constants.js';
 import { createTuiReporter } from '../uiReporter.js';
 import { createClient } from '../../config/apiClient.js';
+import { estimateTokens, getSafeMaxTokens } from '../../utils/budgeting.js';
 import {
   DEFAULT_SUMMARY,
   truncate,
@@ -21,7 +22,20 @@ import {
 
 const MODE_MAP = Object.fromEntries(MODES.map((mode) => [mode.value, mode]));
 
-export function useChatState({ mode, model, onExit }) {
+function estimateMessageTokens(messages = []) {
+  return messages.reduce((total, message) => {
+    const content = typeof message?.content === 'string'
+      ? message.content
+      : typeof message?.text === 'string'
+        ? message.text
+        : message?.content != null
+          ? JSON.stringify(message.content)
+          : '';
+    return total + estimateTokens(content || '');
+  }, 0);
+}
+
+export function useChatState({ mode, model, availableModes = MODES, availableModels = [], onModeChange, onModelChange, onExit }) {
   const { stdout } = useStdout();
 
   const [dims, setDims] = useState({
@@ -42,6 +56,7 @@ export function useChatState({ mode, model, onExit }) {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showQuestions, setShowQuestions] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [pickerState, setPickerState] = useState(null);
   const [followLive, setFollowLive] = useState(true);
   const [scrollOffset, setScrollOffset] = useState(0);
 
@@ -175,6 +190,11 @@ export function useChatState({ mode, model, onExit }) {
 
     if (inputChars === '?' && !key.ctrl && !key.meta && !key.escape && input.trim() === '') {
       setShowShortcuts((prev) => !prev);
+      return;
+    }
+
+    if (key.escape && pickerState) {
+      setPickerState(null);
       return;
     }
 
@@ -384,6 +404,29 @@ export function useChatState({ mode, model, onExit }) {
   const appendMessage = useCallback((type, text, extra = {}) => {
     setMessages((previous) => [...previous, { type, text, id: nextId(), ...extra }]);
   }, [nextId]);
+
+  const applyModeSwitch = useCallback((selectedMode) => {
+    if (!selectedMode) return;
+    if (typeof onModeChange === 'function') onModeChange(selectedMode);
+    appendMessage('system', `Mode switched to ${selectedMode.label}.`);
+    setPickerState(null);
+  }, [appendMessage, onModeChange]);
+
+  const applyModelSwitch = useCallback((selectedModel) => {
+    if (!selectedModel) return;
+    if (typeof onModelChange === 'function') onModelChange(selectedModel);
+    appendMessage('system', `Model switched to ${selectedModel.name}.`);
+    setPickerState(null);
+  }, [appendMessage, onModelChange]);
+
+  const handlePickerSelect = useCallback((item) => {
+    if (!item || item.value === 'CANCEL') {
+      setPickerState(null);
+      return;
+    }
+    if (pickerState?.type === 'mode') applyModeSwitch(item.payload);
+    if (pickerState?.type === 'model') applyModelSwitch(item.payload);
+  }, [applyModeSwitch, applyModelSwitch, pickerState]);
 
   const runDirectProcess = useCallback(async (command, args = [], options = {}) => {
     const { spawn } = await import('child_process');
@@ -625,9 +668,11 @@ export function useChatState({ mode, model, onExit }) {
     let reply = '';
     let sawContent = false;
     try {
+      const inputTokens = estimateMessageTokens(chatMessages);
+      const safeMaxTokens = getSafeMaxTokens(inputTokens, model);
       const stream = await client.chat.completions.create({
         model: model.id, messages: chatMessages, temperature: model.temperature,
-        top_p: model.topP, max_tokens: model.maxTokens, stream: true, ...model.extraParams,
+        top_p: model.topP, max_tokens: safeMaxTokens, stream: true, ...model.extraParams,
       }, { signal: abortControllerRef.current.signal });
 
       for await (const chunk of stream) {
@@ -671,9 +716,11 @@ export function useChatState({ mode, model, onExit }) {
         const toolCalls = [];
         setStreamResponseContent('');
 
+        const inputTokens = estimateMessageTokens(agentMessages);
+        const safeMaxTokens = getSafeMaxTokens(inputTokens, model);
         const stream = await client.chat.completions.create({
           model: model.id, messages: agentMessages, temperature: model.temperature,
-          top_p: model.topP, max_tokens: model.maxTokens, stream: true, tools, ...model.extraParams,
+          top_p: model.topP, max_tokens: safeMaxTokens, stream: true, tools, ...model.extraParams,
         }, { signal: abortControllerRef.current.signal });
 
         for await (const chunk of stream) {
@@ -843,7 +890,12 @@ export function useChatState({ mode, model, onExit }) {
         lastCheckpointRef.current = checkpoint;
       }
 
-      return { type: 'assistant', text: typeof execResult.finalMessage.content === 'string' ? execResult.finalMessage.content : 'Agent completed.', id: nextId() };
+      const finalContent = execResult?.finalMessage?.content;
+      return {
+        type: 'assistant',
+        text: typeof finalContent === 'string' ? finalContent : 'Agent completed.',
+        id: nextId(),
+      };
     } catch (error) {
       if (checkpoint) gitRestore(checkpoint);
       if (error.name === 'AbortError') return { type: 'system', text: 'Execution aborted.', id: nextId() };
@@ -953,13 +1005,76 @@ export function useChatState({ mode, model, onExit }) {
       return;
     }
 
+    const normalizedTrimmed = trimmed.toLowerCase();
+
+    if (/^\/model(\s|$)/.test(normalizedTrimmed)) {
+      setInput('');
+
+      const requestedModel = trimmed.slice(6).trim().toLowerCase();
+      if (!requestedModel) {
+        setPickerState({
+          type: 'model',
+          title: 'Select Model',
+          items: availableModels.map((entry) => ({
+            label: `${entry.name}${entry.key === model?.key || entry.id === model?.id ? ' (Current)' : ''}`,
+            value: entry.key,
+            key: `model-${entry.key}`,
+            payload: entry,
+          })),
+        });
+        return;
+      }
+
+      const matchedModel = availableModels.find((entry) =>
+        entry.key.toLowerCase() === requestedModel
+        || entry.name.toLowerCase() === requestedModel
+        || entry.id.toLowerCase() === requestedModel
+      );
+      if (!matchedModel) {
+        appendMessage('system', `Unknown model: ${requestedModel}`);
+        return;
+      }
+
+      applyModelSwitch(matchedModel);
+      return;
+    }
+
+    if (/^\/mode(\s|$)/.test(normalizedTrimmed)) {
+      setInput('');
+
+      const requestedMode = trimmed.slice(5).trim().toLowerCase();
+      if (!requestedMode) {
+        setPickerState({
+          type: 'mode',
+          title: 'Select Mode',
+          items: availableModes.map((entry) => ({
+            label: `${entry.label}${entry.value === mode?.value ? ' (Current)' : ''}`,
+            value: entry.value,
+            key: `mode-${entry.value}`,
+            payload: entry,
+          })),
+        });
+        return;
+      }
+
+      const matchedMode = availableModes.find((entry) =>
+        entry.value.toLowerCase() === requestedMode || entry.label.toLowerCase() === requestedMode
+      );
+      if (!matchedMode) {
+        appendMessage('system', `Unknown mode: ${requestedMode}`);
+        return;
+      }
+
+      applyModeSwitch(matchedMode);
+      return;
+    }
+
     if (trimmed.toLowerCase() === '/expand' || trimmed.toLowerCase() === '/collapse' || trimmed.toLowerCase() === '/toggle') {
       toggleLatestCollapsible();
       setInput('');
       return;
     }
 
-    const normalizedTrimmed = trimmed.toLowerCase();
     const canUndoWithShortcut = normalizedTrimmed === 'n' && !!lastCheckpointRef.current;
     if (normalizedTrimmed === 'undo' || canUndoWithShortcut) {
       setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
@@ -1005,7 +1120,7 @@ export function useChatState({ mode, model, onExit }) {
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [appendMessage, executeHandler, mode, nextId, onExit, pendingQuestion, pendingQuestionIndex, pendingQuestionManualEntry, resolveBuildCommand, resolvePendingQuestionAnswer, runGitShortcut, runUndoShortcut, toggleLatestCollapsible]);
+  }, [appendMessage, applyModeSwitch, applyModelSwitch, availableModels, availableModes, executeHandler, mode, model, nextId, onExit, pendingQuestion, pendingQuestionIndex, pendingQuestionManualEntry, resolveBuildCommand, resolvePendingQuestionAnswer, runGitShortcut, runUndoShortcut, toggleLatestCollapsible]);
 
   return {
     dims,
@@ -1016,6 +1131,8 @@ export function useChatState({ mode, model, onExit }) {
     currentTurn,
     showQuestions, setShowQuestions,
     showShortcuts, setShowShortcuts,
+    pickerState, setPickerState,
+    handlePickerSelect,
     followLive, setFollowLive,
     scrollOffset,
     setScrollOffset,

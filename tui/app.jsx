@@ -20,7 +20,7 @@ const App = () => {
   const resolveModel = (key) => {
     try {
       const config = getModel(key);
-      return config;
+      return { ...config, key };
     } catch (e) {
       return null;
     }
@@ -34,7 +34,19 @@ const App = () => {
     setView('welcome');
   };
 
+  const handleModelChangeInChat = (selected) => {
+    setModelKey(selected.key);
+    setModelDisplay({ label: selected.name });
+    const config = resolveModel(selected.key);
+    if (config) setModelConfig(config);
+  };
+
+  const handleModeChangeInChat = (selectedMode) => {
+    setMode(selectedMode);
+  };
+
   const currentModel = modelConfig || {
+    key: modelKey,
     name: modelDisplay.label,
     id: 'moonshotai/kimi-k2.5',
     apiKey: process.env.NVIDIA_API_KEY || '',
@@ -94,6 +106,10 @@ const App = () => {
         <ChatScreen
           mode={mode}
           model={currentModel}
+          availableModes={MODES}
+          availableModels={listModels()}
+          onModeChange={handleModeChangeInChat}
+          onModelChange={handleModelChangeInChat}
           onExit={() => setView('welcome')}
         />
       )}
