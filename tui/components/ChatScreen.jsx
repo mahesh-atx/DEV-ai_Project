@@ -371,6 +371,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const currentActivityRef = useRef([]);
   const currentSummaryRef = useRef(DEFAULT_SUMMARY);
   const abortControllerRef = useRef(null);
+  const lastCheckpointRef = useRef(null);
 
   if (!clientRef.current) {
     try {
@@ -516,6 +517,142 @@ const ChatScreen = ({ mode, model, onExit }) => {
     abortControllerRef.current = null;
   }, []);
 
+  const appendMessage = useCallback((type, text, extra = {}) => {
+    setMessages((previous) => [...previous, { type, text, id: nextId(), ...extra }]);
+  }, [nextId]);
+
+  const runDirectProcess = useCallback(async (command, args = [], options = {}) => {
+    const { spawn } = await import('child_process');
+
+    return new Promise((resolve) => {
+      const commandText = [command, ...args].join(' ').trim();
+      pushActivity('command', `Bash(${truncate(commandText, 60)})`);
+
+      let stdoutText = '';
+      let stderrText = '';
+      const child = spawn(command, args, {
+        cwd: options.cwd || process.cwd(),
+        shell: false,
+        windowsHide: true,
+      });
+
+      child.stdout.on('data', (data) => {
+        const text = data.toString();
+        stdoutText += text;
+        text.split(/\r?\n/).filter((line) => line.trim()).forEach((line) => {
+          pushActivity('status', truncate(line, 100));
+        });
+      });
+
+      child.stderr.on('data', (data) => {
+        const text = data.toString();
+        stderrText += text;
+        text.split(/\r?\n/).filter((line) => line.trim()).forEach((line) => {
+          pushActivity('error', truncate(line, 100));
+        });
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) pushActivity('success', `Exit ${code}: ${truncate(commandText, 40)}`);
+        else pushActivity('error', `Exit ${code}: ${truncate(commandText, 40)}`);
+
+        resolve({
+          ok: code === 0,
+          status: code ?? -1,
+          stdout: stdoutText,
+          stderr: stderrText,
+        });
+      });
+
+      child.on('error', (error) => {
+        pushActivity('error', `Spawn error: ${error.message}`);
+        resolve({
+          ok: false,
+          status: -1,
+          stdout: stdoutText,
+          stderr: error.message,
+        });
+      });
+    });
+  }, [pushActivity]);
+
+  const runGitShortcut = useCallback(async (commitMessage) => {
+    const message = commitMessage.trim();
+    if (!message) {
+      appendMessage('system', 'Usage: /git <commit message>');
+      return;
+    }
+
+    setIsThinking(true);
+    resetRunState('Git running');
+    setScrollOffset(0);
+
+    try {
+      const statusResult = await runDirectProcess('git', ['status', '--short']);
+      const pendingChanges = `${statusResult.stdout || ''}${statusResult.stderr || ''}`.trim();
+
+      if (!pendingChanges) {
+        appendMessage('system', 'There are no local changes to commit.');
+        return;
+      }
+
+      const addResult = await runDirectProcess('git', ['add', '-A']);
+      if (!addResult.ok) {
+        appendMessage('system', 'Git add failed. Review the transcript above for the exact error.');
+        return;
+      }
+
+      const commitResult = await runDirectProcess('git', ['commit', '-m', message]);
+      const commitOutput = `${commitResult.stdout || ''}\n${commitResult.stderr || ''}`.trim();
+      if (!commitResult.ok) {
+        if (/nothing to commit/i.test(commitOutput)) {
+          appendMessage('system', 'Git reported that there was nothing to commit.');
+        } else {
+          appendMessage('system', 'Git commit failed. Review the transcript above for the exact error.');
+        }
+        return;
+      }
+
+      const pushResult = await runDirectProcess('git', ['push']);
+      if (!pushResult.ok) {
+        appendMessage('system', 'Git push failed. Review the transcript above for the exact error.');
+        return;
+      }
+
+      appendMessage('assistant', `Committed and pushed your current changes with message: ${message}`);
+    } catch (error) {
+      appendMessage('system', `Git shortcut failed: ${error.message}`);
+    } finally {
+      finishRun();
+      setInput('');
+    }
+  }, [appendMessage, finishRun, resetRunState, runDirectProcess]);
+
+  const runUndoShortcut = useCallback(async () => {
+    const checkpoint = lastCheckpointRef.current;
+    if (!checkpoint) {
+      appendMessage('system', 'There is no saved AI checkpoint to undo right now.');
+      return;
+    }
+
+    setIsThinking(true);
+    resetRunState('Undo running');
+    setScrollOffset(0);
+    pushActivity('status', 'Restoring the previous workspace snapshot...');
+
+    try {
+      const { gitRestore } = await import('../../utils/git.js');
+      gitRestore(checkpoint);
+      lastCheckpointRef.current = null;
+      appendMessage('system', 'Reverted the last AI workspace changes.');
+    } catch (error) {
+      appendMessage('system', `Undo failed: ${error.message}`);
+    } finally {
+      finishRun();
+      setInput('');
+    }
+  }, [appendMessage, finishRun, pushActivity, resetRunState]);
+
   const buildReporter = useCallback((activeMode) => createTuiReporter({
     phaseHeader: ({ label }) => {
       setStreamLabel(label || `${activeMode.label} running`);
@@ -618,11 +755,11 @@ const ChatScreen = ({ mode, model, onExit }) => {
     if (!client) return { type: 'system', text: 'API client is not configured.', id: nextId() };
 
     const [
-      { default: runAgentPipeline }, { buildSmartContext }, { patchFile }, { runCommands },
+      { default: runAgentPipeline }, { buildSmartContext }, { patchFile },
       { gitCheckpoint, gitRestore, gitDiscard }, { listWorkspaceEntries, searchWorkspaceFiles, searchWorkspaceContent },
       { runWorkspaceLsp }, path, fs, { parseJSON }, policyModule
     ] = await Promise.all([
-      import('../../engine/agentController.js'), import('../../engine/context.js'), import('../../engine/patchEngine.js'), import('../../engine/commandExecutor.js'),
+      import('../../engine/agentController.js'), import('../../engine/context.js'), import('../../engine/patchEngine.js'),
       import('../../utils/git.js'), import('../../utils/fileTools.js'), import('../../utils/lspTools.js'), import('path'), import('fs'), import('../../engine/jsonParser.js'),
       import('../../config/commandPolicy.js')
         .catch(() => import('../../engine/commandPolicy.js'))
@@ -782,7 +919,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
         
         execResult = await runAgentPipeline(query + reminder, smartContext, runtime, { autoPolish: false, role, reporter, extraContext: { planFile: planFileRelative } });
         
-        if (checkpoint) gitDiscard(checkpoint);
+        if (checkpoint) {
+          if (lastCheckpointRef.current) gitDiscard(lastCheckpointRef.current);
+          lastCheckpointRef.current = checkpoint;
+        }
         
         let planContent = execResult?.finalMessage?.content || '';
         try {
@@ -804,7 +944,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
       }
 
       execResult = await runAgentPipeline(query, smartContext, runtime, { autoPolish: activeMode.value === 'polish', role, reporter });
-      if (checkpoint) gitDiscard(checkpoint);
+      if (checkpoint) {
+        if (lastCheckpointRef.current) gitDiscard(lastCheckpointRef.current);
+        lastCheckpointRef.current = checkpoint;
+      }
 
       return { type: 'assistant', text: typeof execResult.finalMessage.content === 'string' ? execResult.finalMessage.content : 'Agent completed.', id: nextId() };
     } catch (error) {
@@ -853,7 +996,22 @@ const ChatScreen = ({ mode, model, onExit }) => {
     setInput('');
   }, [mode, messages, nextId, buildReporter, finishRun, resetRunState, runAgentMode, runAskMode]);
 
-  const handleSubmit = useCallback((value) => {
+  const resolveBuildCommand = useCallback(async (explicitCommand = '') => {
+    const requested = explicitCommand.trim();
+    if (requested) {
+      setCustomBuildCmd(requested);
+      return requested;
+    }
+
+    if (customBuildCmd.trim()) {
+      return customBuildCmd.trim();
+    }
+
+    const { detectBuildCommand } = await import('../../engine/context.js');
+    return detectBuildCommand(process.cwd(), null);
+  }, [customBuildCmd]);
+
+  const handleSubmit = useCallback(async (value) => {
     if (pendingQuestion && questionResolverRef.current) {
       const trimmed = value.trim();
       if (!trimmed) return;
@@ -909,18 +1067,53 @@ const ChatScreen = ({ mode, model, onExit }) => {
       return;
     }
 
+    const normalizedTrimmed = trimmed.toLowerCase();
+    const canUndoWithShortcut = normalizedTrimmed === 'n' && !!lastCheckpointRef.current;
+    if (normalizedTrimmed === 'undo' || canUndoWithShortcut) {
+      setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
+      setInput('');
+      await runUndoShortcut();
+      return;
+    }
+
+    if (trimmed.startsWith('/git')) {
+      const commitMessage = trimmed.slice(4).trim();
+      setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
+      setInput('');
+      await runGitShortcut(commitMessage);
+      return;
+    }
+
     let activeMode = mode;
     let query = trimmed;
     if (trimmed.startsWith('/plan')) { activeMode = MODE_MAP.planner; query = trimmed.slice(5).trim() || 'Create a plan.'; }
     else if (trimmed.startsWith('/polish')) { activeMode = MODE_MAP.polish; query = trimmed.slice(7).trim() || 'Improve code.'; }
     else if (trimmed.startsWith('/agent')) { activeMode = MODE_MAP.agent; query = trimmed.slice(6).trim(); }
     else if (trimmed.startsWith('/ask')) { activeMode = MODE_MAP.ask; query = trimmed.slice(4).trim(); }
+    else if (trimmed.startsWith('/build')) {
+      const requestedBuildCommand = trimmed.slice(6).trim();
+      const buildCommand = await resolveBuildCommand(requestedBuildCommand);
+
+      setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
+      setInput('');
+      setScrollOffset(0);
+
+      if (!buildCommand) {
+        appendMessage('system', 'I could not detect a build or test command here. Use `/build <command>` to set one for this session.');
+        return;
+      }
+
+      activeMode = { value: 'build', label: 'Build' };
+      query = `Run the workspace build or test command \`${buildCommand}\` from the project root. Start by executing exactly that command. If it fails, inspect the output, fix the underlying issue in the code or workspace, and rerun the same command until it succeeds or you hit a real blocker. Keep the final response focused on what changed and whether the build passed.`;
+      executeHandler(query, activeMode);
+      return;
+    }
 
     setMessages((previous) => [...previous, { type: 'user', text: trimmed, id: nextId() }]);
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [executeHandler, mode, nextId, onExit, pendingQuestion, pushActivity, toggleLatestCollapsible]);
+  }, [appendMessage, executeHandler, mode, nextId, onExit, pendingQuestion, pushActivity, resolveBuildCommand, runGitShortcut, runUndoShortcut, toggleLatestCollapsible]);
 
   const handleQuestionSelect = useCallback((item) => {
     setShowQuestions(false);
