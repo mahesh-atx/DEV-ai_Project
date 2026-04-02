@@ -3,6 +3,18 @@
  */
 
 import { parse as partialParse } from "partial-json";
+import { estimateTokens, getSafeMaxTokens } from "../utils/budgeting.js";
+
+function estimateMessageTokens(messages = []) {
+  return messages.reduce((total, message) => {
+    const content = typeof message?.content === "string"
+      ? message.content
+      : message?.content != null
+        ? JSON.stringify(message.content)
+        : "";
+    return total + estimateTokens(content || "");
+  }, 0);
+}
 
 export function cleanText(text) {
   return text
@@ -125,12 +137,14 @@ export async function retryReplyAsStructuredJSON(client, modelConfig, apiMessage
       },
     ];
 
+    const inputTokens = estimateMessageTokens(retryMessages);
+    const safeMaxTokens = getSafeMaxTokens(inputTokens, modelConfig);
     const completion = await client.chat.completions.create({
       model: modelConfig.id,
       messages: retryMessages,
       temperature: 0,
       top_p: modelConfig.topP,
-      max_tokens: modelConfig.maxTokens,
+      max_tokens: safeMaxTokens,
       ...modelConfig.extraParams,
     });
 
