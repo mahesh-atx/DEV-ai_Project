@@ -83,83 +83,99 @@ function buildToolNarration(toolCall) {
   const args = parseToolArguments(toolCall?.function?.arguments);
 
   switch (toolName) {
+
     case 'read':
     case 'read_file': {
       const path = firstNonEmptyValue([args.path, args.filePath]);
       return path
-        ? `I'm opening ${path} to inspect the exact code before I decide what to do next.`
-        : "I'm opening the relevant file so I can inspect the exact code before making changes.";
+        ? `Before making any decisions, I’m opening "${path}" to read the exact implementation. I want to understand how this part of the code currently behaves, what assumptions it makes, and whether there are any edge cases or dependencies I need to be aware of. Once I’ve reviewed it, I’ll be in a much better position to decide what needs to change (if anything).`
+        : `I’m opening the relevant file to inspect the existing implementation in detail. My goal here is to fully understand the current logic, constraints, and flow before making any modifications, so I don’t introduce regressions or incorrect assumptions.`;
     }
+
     case 'list':
     case 'list_files': {
       const path = firstNonEmptyValue([args.path, '.']);
-      return `I'm listing ${path} to understand the workspace structure before I go deeper.`;
+      return `To get proper context before diving deeper, I’m listing the contents of "${path}". This helps me understand how the project is structured, where important files are located, and how different parts of the codebase are organized so I can navigate efficiently.`;
     }
+
     case 'glob':
     case 'search_files': {
       const pattern = firstNonEmptyValue([args.pattern]);
       return pattern
-        ? `I'm searching for files matching ${pattern} so I can find the right place to inspect.`
-        : "I'm searching the workspace to find the right files to inspect.";
+        ? `I’m searching for files matching "${pattern}" across the workspace. The goal is to quickly narrow down where the relevant logic might live, instead of manually scanning everything. Once I find the right files, I’ll inspect them more closely.`
+        : `I’m scanning the workspace to locate relevant files that might contain the logic I need. This step helps me avoid guesswork and ensures I’m working in the correct place.`;
     }
+
     case 'grep':
     case 'search_content': {
       const query = firstNonEmptyValue([args.query, args.pattern]);
       return query
-        ? `I'm searching the codebase for ${query} so I can trace where this behavior is coming from.`
-        : "I'm searching through the codebase to trace where this behavior is coming from.";
+        ? `I’m searching through the codebase for occurrences of "${query}". This allows me to trace how this behavior is implemented, where it originates, and how it propagates across the system. It’s especially useful for identifying dependencies and hidden side effects.`
+        : `I’m scanning through the codebase to trace how this behavior is implemented and connected across different modules. This helps me build a complete mental model before making changes.`;
     }
+
     case 'bash':
     case 'run_command': {
       const command = firstNonEmptyValue([args.command]);
       return command
-        ? `I'm running ${command} to verify the current state directly from the workspace.`
-        : "I'm running a command to verify the current state directly from the workspace.";
+        ? `To validate my understanding against reality, I’m executing "${command}" in the environment. This lets me observe the actual behavior, outputs, or errors directly, which is critical before making any assumptions or applying fixes.`
+        : `I’m running a command in the environment to verify the current system state and gather real execution data. This helps ensure that my next steps are based on actual behavior, not just static analysis.`;
     }
+
     case 'write':
     case 'write_file': {
       const path = firstNonEmptyValue([args.path, args.filePath]);
       return path
-        ? `I'm writing ${path} now that I know what needs to change.`
-        : "I'm writing the required file changes now that I know what needs to change.";
+        ? `Now that I clearly understand what needs to be implemented, I’m writing the updated content to "${path}". This step introduces the required changes in a clean and controlled way, ensuring the new logic aligns with the existing structure.`
+        : `I’m writing the necessary file changes based on the analysis I’ve done. At this point, I’m confident about what needs to be implemented and how it should integrate with the rest of the codebase.`;
     }
+
     case 'edit':
     case 'edit_file':
     case 'multiedit':
     case 'apply_patch': {
       const path = firstNonEmptyValue([args.path, args.filePath]);
       return path
-        ? `I've identified the fix, and I'm updating ${path} now.`
-        : "I've identified the fix, and I'm applying the code changes now.";
+        ? `I’ve identified the root cause and determined the correct fix, so I’m now updating "${path}". I’ll apply the changes carefully to ensure they solve the problem without affecting other parts of the system.`
+        : `I’ve pinpointed the issue and designed a fix, so I’m applying the necessary code changes. I’ll make sure the update is precise and doesn’t introduce unintended side effects.`;
     }
+
     case 'websearch': {
       const query = firstNonEmptyValue([args.query]);
       return query
-        ? `I'm searching the web for ${query} so I can verify it with current information.`
-        : "I'm searching the web so I can verify this with current information.";
+        ? `To ensure I’m working with accurate and up-to-date information, I’m searching the web for "${query}". This helps me validate assumptions, confirm best practices, or gather missing technical details before proceeding.`
+        : `I’m performing a web search to gather reliable and current information that can guide my next steps and reduce uncertainty.`;
     }
+
     case 'webfetch': {
       const url = firstNonEmptyValue([args.url]);
       return url
-        ? `I'm fetching ${url} so I can inspect the source directly.`
-        : "I'm fetching the referenced page so I can inspect the source directly.";
+        ? `I’m fetching the content from "${url}" so I can inspect the source directly. This allows me to extract precise details rather than relying on summaries or assumptions.`
+        : `I’m retrieving the referenced web page to analyze its contents directly and extract any useful or relevant information.`;
     }
+
     case 'question':
     case 'ask_user':
-      return "I need one clarification before I continue so I don't make the wrong change.";
+      return `Before I proceed further, I need a quick clarification. This will help me avoid incorrect assumptions and ensure that the solution I provide is exactly aligned with your expectations.`;
+
     case 'delegate_task':
     case 'task':
-      return "I'm delegating a focused subtask to gather the missing context more efficiently.";
+      return `To handle this more efficiently, I’m delegating a focused subtask that will gather the missing context or process a specific part of the problem. This allows me to move faster while keeping the overall solution accurate.`;
+
     case 'batch':
-      return "I'm running a small batch of tool calls to gather the needed context faster.";
+      return `Instead of making multiple separate calls, I’m executing a batch of actions together to gather all the required information in one go. This improves efficiency and reduces unnecessary back-and-forth.`;
+
     case 'finish_task':
-      return "I've finished the work and I'm wrapping up with a final summary.";
+      return `All required steps have been completed successfully. I’m now consolidating everything and preparing a clear final summary so you can easily understand what was done and what the result is.`;
+
     case 'plan_exit':
-      return "I've completed the plan and I'm wrapping it up for you.";
+      return `The entire plan has been executed step by step. At this point, I’m wrapping things up and presenting the final outcome in a structured and complete form.`;
+
     case 'lsp':
-      return "I'm using lightweight code intelligence to inspect symbols and references in the workspace.";
+      return `I’m using language server capabilities to analyze the code at a deeper level—inspecting symbols, references, and relationships. This gives me a more precise understanding of how different parts of the code interact.`;
+
     default:
-      return `I'm using ${toolName} to move this forward with concrete information.`;
+      return `I’m using the "${toolName}" tool to move forward by gathering concrete, reliable information. This step ensures that my decisions are based on actual data rather than assumptions.`;
   }
 }
 
@@ -196,6 +212,56 @@ function getToolDisplayName(toolName) {
   if (toolName === 'finish_task') return 'Task';
   if (toolName === 'plan_exit') return 'Plan';
   return 'Task';
+}
+
+function getToolPhaseLabel(toolName) {
+  switch (toolName) {
+    case 'read':
+    case 'read_file':
+      return 'Reading files';
+    case 'list':
+    case 'list_files':
+      return 'Listing workspace';
+    case 'glob':
+    case 'search_files':
+      return 'Searching files';
+    case 'grep':
+    case 'search_content':
+    case 'codebase_search':
+    case 'codesearch':
+      return 'Searching code';
+    case 'write':
+    case 'write_file':
+      return 'Writing files';
+    case 'edit':
+    case 'edit_file':
+    case 'multiedit':
+    case 'apply_patch':
+      return 'Editing code';
+    case 'bash':
+    case 'run_command':
+      return 'Running command';
+    case 'websearch':
+      return 'Searching web';
+    case 'webfetch':
+      return 'Fetching page';
+    case 'lsp':
+      return 'Inspecting symbols';
+    case 'question':
+    case 'ask_user':
+      return 'Waiting for input';
+    case 'delegate_task':
+    case 'task':
+      return 'Delegating work';
+    case 'batch':
+      return 'Running tool batch';
+    case 'finish_task':
+      return 'Preparing summary';
+    case 'plan_exit':
+      return 'Finalizing plan';
+    default:
+      return 'Thinking';
+  }
 }
 
 function formatToolArgs(toolName, rawArgs, argsObject) {
@@ -276,6 +342,16 @@ function findLatestCollapsibleId(currentActivity, messageList) {
       if (msg.activityLog[j]?.metadata?.isCollapsible) {
         return msg.activityLog[j].id;
       }
+    }
+  }
+
+  return null;
+}
+
+function findLatestVisibleCollapsibleId(lineList) {
+  for (let i = lineList.length - 1; i >= 0; i--) {
+    if (lineList[i]?.collapsibleId) {
+      return lineList[i].collapsibleId;
     }
   }
 
@@ -387,6 +463,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const abortControllerRef = useRef(null);
   const lastCheckpointRef = useRef(null);
   const liveStatusTimeoutRef = useRef(null);
+  const visibleCollapsibleIdRef = useRef(null);
 
   if (!clientRef.current) {
     try {
@@ -437,7 +514,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   }, []);
 
   const toggleLatestCollapsible = useCallback(() => {
-    const targetId = findLatestCollapsibleId(currentActivityRef.current, messages);
+    const targetId = visibleCollapsibleIdRef.current || findLatestCollapsibleId(currentActivityRef.current, messages);
     if (!targetId) return false;
 
     setExpandedBlocks((prev) => {
@@ -730,6 +807,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     toolExecution: ({ toolName, args, argsObject }) => {
       const displayTool = getToolDisplayName(toolName);
       const cleanArgs = formatToolArgs(toolName, args, argsObject);
+      setStreamLabel(getToolPhaseLabel(toolName));
       pushActivity('tool', `${displayTool}(${truncate(cleanArgs, 50)})`);
     },
     toolResult: ({ toolName, text, fullText, isCollapsible }) => {
@@ -1230,6 +1308,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
       
       let mainText = entry.text;
       let hintText = null;
+      const pushEntryLine = (line) => {
+          if (entry.metadata?.isCollapsible) {
+              linesArray.push({ ...line, collapsibleId: entry.id });
+          } else {
+              linesArray.push(line);
+          }
+      };
 
       if (entry.metadata?.isCollapsible && !isExpanded) {
           hintText = { text: ' (ctrl+r / alt+r / /expand)', color: COLORS.dim };
@@ -1245,7 +1330,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
                     : null;
                   if (isActiveTool) {
                       if (match) {
-                          linesArray.push({ segments: [
+                          pushEntryLine({ segments: [
                               toolIcon,
                               { text: match[1], bold: true, color: COLORS.white },
                               { text: '(', color: COLORS.dim },
@@ -1253,12 +1338,12 @@ const ChatScreen = ({ mode, model, onExit }) => {
                               { text: ')', color: COLORS.dim }
                           ]});
                       } else {
-                          linesArray.push({ segments: [toolIcon, { text: rawText, bold: true, color: COLORS.white }] });
+                          pushEntryLine({ segments: [toolIcon, { text: rawText, bold: true, color: COLORS.white }] });
                       }
                       return;
                   }
                   if (match) {
-                      linesArray.push({ segments: [
+                      pushEntryLine({ segments: [
                           { text: '● ', color: COLORS.green },
                           { text: match[1], bold: true, color: COLORS.white },
                           { text: '(', color: COLORS.dim },
@@ -1266,7 +1351,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
                           { text: ')', color: COLORS.dim }
                       ]});
                   } else {
-                      linesArray.push({ segments: [{ text: '● ', color: COLORS.green }, { text: rawText, bold: true, color: COLORS.white }] });
+                      pushEntryLine({ segments: [{ text: '● ', color: COLORS.green }, { text: rawText, bold: true, color: COLORS.white }] });
                   }
               } else if (isSub) {
                   const textColor = entry.kind === 'error' ? COLORS.red : COLORS.white;
@@ -1275,20 +1360,20 @@ const ChatScreen = ({ mode, model, onExit }) => {
                       { text: l.slice(4), color: textColor }
                   ];
                   if (hintText) segs.push(hintText);
-                  linesArray.push({ segments: segs });
+                  pushEntryLine({ segments: segs });
               } else {
-                  linesArray.push({ segments: [{ text: l, color: COLORS.dim }] });
+                  pushEntryLine({ segments: [{ text: l, color: COLORS.dim }] });
               }
           } else {
-              linesArray.push({ segments: [{ text: isSub ? `    ${l.trimStart()}` : `  ${l.trimStart()}`, color: COLORS.dim }] });
+              pushEntryLine({ segments: [{ text: isSub ? `    ${l.trimStart()}` : `  ${l.trimStart()}`, color: COLORS.dim }] });
           }
       });
 
       if (entry.metadata?.isCollapsible && isExpanded && entry.metadata.fullText) {
           wrapText(entry.metadata.fullText, maxW - 4).forEach(el => {
-              linesArray.push({ segments: [
+              pushEntryLine({ segments: [
                   { text: '      ', color: COLORS.dim },
-                  { text: el, color: COLORS.white, backgroundColor: COLORS.highlight }
+                  { text: el, color: COLORS.dim }
               ]});
           });
       }
@@ -1308,7 +1393,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
               const lineNumStr = (diff.lineNum || ' ').padEnd(5, ' ');
               
-              linesArray.push({ segments: [
+              pushEntryLine({ segments: [
                   { text: '      ' },
                   { text: lineNumStr, color: COLORS.dim },
                   { text: diff.text, color: fgColor, backgroundColor: bgColor }
@@ -1480,6 +1565,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const clampedScroll = Math.min(Math.max(0, scrollOffset), maxScroll);
   const startIndex = Math.max(0, allLines.length - chatLinesAvailable - clampedScroll);
   const visibleLines = allLines.slice(startIndex, startIndex + chatLinesAvailable);
+  visibleCollapsibleIdRef.current = findLatestVisibleCollapsibleId(visibleLines);
 
   if (showQuestions) {
     return (
