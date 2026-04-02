@@ -146,6 +146,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [activityLog, setActivityLog] = useState([]);
 
   const [pendingQuestion, setPendingQuestion] = useState(null);
+  const [pendingQuestionIndex, setPendingQuestionIndex] = useState(0);
+  const [pendingQuestionManualEntry, setPendingQuestionManualEntry] = useState(false);
   const questionResolverRef = useRef(null);
   const [planFollowup, setPlanFollowup] = useState(null);
   const planFollowupResolverRef = useRef(null);
@@ -187,7 +189,53 @@ const ChatScreen = ({ mode, model, onExit }) => {
   }, [isThinking]);
 
   useInput((inputChars, key) => {
-    if (pendingQuestion) return;
+    if (pendingQuestion) {
+      const options = Array.isArray(pendingQuestion.options) ? pendingQuestion.options : [];
+      const totalChoices = options.length > 0 ? options.length + 1 : 0;
+
+      if (options.length > 0 && !pendingQuestionManualEntry) {
+        if (key.upArrow) {
+          setPendingQuestionIndex((prev) => (prev <= 0 ? totalChoices - 1 : prev - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setPendingQuestionIndex((prev) => (prev + 1) % totalChoices);
+          return;
+        }
+        if (key.escape) {
+          setPendingQuestionManualEntry(false);
+          setPendingQuestionIndex(0);
+          setInput('');
+          return;
+        }
+        if (key.return) {
+          if (pendingQuestionIndex === options.length) {
+            setPendingQuestionManualEntry(true);
+            setInput('');
+          } else {
+            const answer = options[pendingQuestionIndex] || options[0];
+            pushActivity('success', `Answer: ${answer}`);
+            const resolver = questionResolverRef.current;
+            questionResolverRef.current = null;
+            setPendingQuestion(null);
+            setPendingQuestionIndex(0);
+            setPendingQuestionManualEntry(false);
+            setInput('');
+            resolver(answer);
+          }
+          return;
+        }
+      }
+
+      if (pendingQuestionManualEntry && key.escape) {
+        setPendingQuestionManualEntry(false);
+        setPendingQuestionIndex(options.length);
+        setInput('');
+        return;
+      }
+
+      return;
+    }
 
     if (isThinkingRef.current) {
       if (key.escape || (key.ctrl && inputChars === 'c')) {
@@ -384,11 +432,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
     },
     askUser: ({ question, options, title }) => {
       return new Promise((resolve) => {
-        let displayText = question;
-        if (options && options.length > 0) {
-          displayText = question + '\n\n' + options.map((opt, i) => `> ${i + 1}. ${opt}`).join('\n');
-        }
-        setPendingQuestion({ question: displayText, options: options || [], title: title || 'Action Required' });
+        setPendingQuestion({ question, options: options || [], title: title || 'Action Required' });
+        setPendingQuestionIndex(0);
+        setPendingQuestionManualEntry(false);
+        setInput('');
         questionResolverRef.current = resolve;
       });
     },
@@ -668,30 +715,30 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
   const handleSubmit = useCallback((value) => {
     if (pendingQuestion && questionResolverRef.current) {
+      if (pendingQuestion.options?.length > 0 && !pendingQuestionManualEntry) {
+        const answer = pendingQuestion.options[pendingQuestionIndex] || pendingQuestion.options[0];
+        pushActivity('success', `Answer: ${answer}`);
+
+        const resolver = questionResolverRef.current;
+        questionResolverRef.current = null;
+        setPendingQuestion(null);
+        setPendingQuestionIndex(0);
+        setPendingQuestionManualEntry(false);
+        setInput('');
+        resolver(answer);
+        return;
+      }
+
       const trimmed = value.trim();
       if (!trimmed) return;
-      const options = typeof pendingQuestion === 'object' && pendingQuestion.options ? pendingQuestion.options : [];
-      const optionMatch = trimmed.match(/^(\d+)$/);
-      
-      let answer = trimmed;
-      if (optionMatch && options.length > 0) {
-        const idx = parseInt(optionMatch[1], 10) - 1;
-        if (idx >= 0 && idx < options.length) answer = options[idx];
-      } else if (options.length > 0) {
-        const lowerInput = trimmed.toLowerCase();
-        for (const opt of options) {
-          if (opt.toLowerCase() === lowerInput) {
-            answer = opt;
-            break;
-          }
-        }
-      }
-      
+      const answer = trimmed;
       pushActivity('success', `Answer: ${answer}`); // Native inline display
       
       const resolver = questionResolverRef.current;
       questionResolverRef.current = null;
       setPendingQuestion(null);
+      setPendingQuestionIndex(0);
+      setPendingQuestionManualEntry(false);
       setInput('');
       resolver(answer);
       return;
@@ -952,6 +999,9 @@ const ChatScreen = ({ mode, model, onExit }) => {
       qStr.split('\n').forEach(line => {
         qLinesCount += wrapText(line, dims.columns - 4).length;
       });
+      if (pendingQuestion.options?.length > 0) {
+        qLinesCount += pendingQuestion.options.length + 2;
+      }
       uiReservedLines += 3 + qLinesCount;
   }
   if (planFollowup) uiReservedLines += 5;
@@ -1020,10 +1070,24 @@ const ChatScreen = ({ mode, model, onExit }) => {
         <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} paddingX={1} marginX={0} marginBottom={1}>
           <Text color={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} bold>{pendingQuestion.title || 'Action Required'}</Text>
           <Box flexDirection="column" marginTop={1} marginBottom={0}>
-            {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => {
-              const isOption = line.trim().startsWith('>');
-              return <Text key={i} color={isOption ? COLORS.white : COLORS.dim} bold={isOption}>{line}</Text>;
-            })}
+            {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => (
+              <Text key={i} color={COLORS.dim}>{line}</Text>
+            ))}
+            {pendingQuestion.options?.length > 0 && (
+              <Box flexDirection="column" marginTop={1}>
+                {pendingQuestion.options.map((option, i) => (
+                  <Text key={option} color={pendingQuestionIndex === i && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim} bold={pendingQuestionIndex === i && !pendingQuestionManualEntry}>
+                    {pendingQuestionIndex === i && !pendingQuestionManualEntry ? '› ' : '  '}{option}
+                  </Text>
+                ))}
+                <Text color={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim} bold={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry}>
+                  {pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? '› ' : '  '}Type your answer
+                </Text>
+                <Text color={COLORS.dim}>
+                  {pendingQuestionManualEntry ? 'Type below and press Enter. Esc returns to choices.' : 'Use arrows and Enter'}
+                </Text>
+              </Box>
+            )}
           </Box>
         </Box>
       )}
@@ -1057,8 +1121,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
                 if (!isThinking || pendingQuestion) setInput(val);
               }}
               onSubmit={handleSubmit}
-              placeholder={pendingQuestion ? (pendingQuestion.options?.length > 0 ? 'Type a number or your answer...' : 'Type your answer...') : ''}
-              focus={!isThinking || pendingQuestion}
+              placeholder={pendingQuestion ? (pendingQuestion.options?.length > 0 ? (pendingQuestionManualEntry ? 'Type your answer...' : '') : 'Type your answer...') : ''}
+              focus={!isThinking || (pendingQuestion && (pendingQuestionManualEntry || !pendingQuestion.options?.length))}
               showCursor
             />
           </Box>
