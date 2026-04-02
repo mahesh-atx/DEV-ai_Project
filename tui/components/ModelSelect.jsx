@@ -18,7 +18,7 @@ const ModelSelect = ({ onSelect, onBack }) => {
 
   return (
     <Box flexDirection="column" padding={2} width="100%" alignItems="center">
-      <Box borderStyle="round" borderColor={THEME.border} padding={2} flexDirection="column" width={72}>
+      <Box borderStyle="round" borderColor={THEME.border} padding={2} flexDirection="column" width={92}>
         <Text color={THEME.accent} bold marginBottom={1}>Select AI Model</Text>
         <Box flexDirection="column" paddingX={2}>
           <SelectInput

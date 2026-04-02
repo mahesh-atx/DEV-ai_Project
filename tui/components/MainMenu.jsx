@@ -26,7 +26,7 @@ const MainMenu = ({ mode, model, onSelect }) => {
         borderColor={THEME.border}
         padding={2}
         flexDirection="column"
-        width={72}
+        width={92}
       >
         <Box flexDirection="column" alignItems="center" marginBottom={2}>
           <Text color={THEME.accent}>{LOGO}</Text>

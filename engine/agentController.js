@@ -417,13 +417,20 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
 
             if (output && typeof output.logs === 'string') {
                toolResultStr = output.logs || "Command executed with no output.";
+            } else if (output && (typeof output.stdout === 'string' || typeof output.stderr === 'string')) {
+               const out = (output.stdout || '').trim();
+               const err = (output.stderr || '').trim();
+               if (out && !err) toolResultStr = out;
+               else if (!out && err) toolResultStr = err;
+               else if (out && err) toolResultStr = `${out}\n${err}`;
+               else toolResultStr = `Command exited with code ${output.status ?? 'unknown'}.`;
             } else if (typeof output === 'string') {
                toolResultStr = output;
             } else {
-               toolResultStr = JSON.stringify(output) || "Command executed.";
+               toolResultStr = "Command executed.";
             }
-          }
-          else if (tc.function.name === "list_files") {
+           }
+           else if (tc.function.name === "list_files") {
             const listPath = args.path || ".";
             if (typeof runtime.listFiles === "function") {
               const results = await runtime.listFiles(listPath, args.depth, args.includeHidden);
