@@ -9,6 +9,9 @@ import {
   buildToolNarrationSummary,
   getToolDisplayName,
   getToolPhaseLabel,
+  shouldInlineToolDetails,
+  buildInlineDetailText,
+  buildInlineToolDetailText,
   formatToolArgs,
   findLatestCollapsibleId,
   mergeSummary,
@@ -38,6 +41,8 @@ export function useChatState({ mode, model, onExit }) {
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showQuestions, setShowQuestions] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [followLive, setFollowLive] = useState(true);
   const [scrollOffset, setScrollOffset] = useState(0);
 
   const [expandedBlocks, setExpandedBlocks] = useState(new Set());
@@ -49,6 +54,7 @@ export function useChatState({ mode, model, onExit }) {
   const [liveStatus, setLiveStatus] = useState(null);
 
   const [pendingQuestion, setPendingQuestion] = useState(null);
+  const [pendingQuestionIndex, setPendingQuestionIndex] = useState(0);
   const questionResolverRef = useRef(null);
   const [planFollowup, setPlanFollowup] = useState(null);
   const planFollowupResolverRef = useRef(null);
@@ -62,6 +68,8 @@ export function useChatState({ mode, model, onExit }) {
   const lastCheckpointRef = useRef(null);
   const liveStatusTimeoutRef = useRef(null);
   const visibleCollapsibleIdRef = useRef(null);
+  const activeToolPhaseRef = useRef('');
+  const activeRunTokenRef = useRef(0);
 
   if (!clientRef.current) {
     try {
@@ -125,14 +133,77 @@ export function useChatState({ mode, model, onExit }) {
   }, [messages]);
 
   useInput((inputChars, key) => {
-    if (pendingQuestion) return;
+    if (pendingQuestion) {
+      const options = Array.isArray(pendingQuestion.options) ? pendingQuestion.options : [];
+      if (options.length > 0) {
+        if (key.upArrow) {
+          setPendingQuestionIndex((prev) => (prev <= 0 ? options.length - 1 : prev - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setPendingQuestionIndex((prev) => (prev + 1) % options.length);
+          return;
+        }
+        if (key.return) {
+          resolvePendingQuestionAnswer(options[pendingQuestionIndex] || options[0]);
+          return;
+        }
+      }
+      return;
+    }
+
+    if (inputChars === '?' && !key.ctrl && !key.meta && !key.escape && input.trim() === '') {
+      setShowShortcuts((prev) => !prev);
+      return;
+    }
+
+    if (key.escape && showShortcuts) {
+      setShowShortcuts(false);
+      return;
+    }
+
+    if (!showQuestions) {
+      if (key.upArrow) {
+        setFollowLive(false);
+        setScrollOffset((prev) => prev + 1);
+        return;
+      }
+      if (key.downArrow) {
+        setScrollOffset((prev) => {
+          const next = Math.max(0, prev - 1);
+          setFollowLive(next === 0);
+          return next;
+        });
+        return;
+      }
+      if (key.pageUp) {
+        setFollowLive(false);
+        setScrollOffset((prev) => prev + 10);
+        return;
+      }
+      if (key.pageDown) {
+        setScrollOffset((prev) => {
+          const next = Math.max(0, prev - 10);
+          setFollowLive(next === 0);
+          return next;
+        });
+        return;
+      }
+      if (key.home) {
+        setFollowLive(false);
+        setScrollOffset(Number.MAX_SAFE_INTEGER);
+        return;
+      }
+      if (key.end) {
+        setFollowLive(true);
+        setScrollOffset(0);
+        return;
+      }
+    }
 
     if (isThinkingRef.current) {
       if (key.escape || (key.ctrl && inputChars === 'c')) {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-          pushActivity('warning', 'Run manually interrupted by user.');
-        }
+        stopActiveRun();
       }
     } else {
       if (key.escape && showQuestions) {
@@ -151,11 +222,6 @@ export function useChatState({ mode, model, onExit }) {
       }
 
       if (!showQuestions) {
-        if (key.upArrow) setScrollOffset((prev) => prev + 1);
-        if (key.downArrow) setScrollOffset((prev) => Math.max(0, prev - 1));
-        if (key.pageUp) setScrollOffset((prev) => prev + 10);
-        if (key.pageDown) setScrollOffset((prev) => Math.max(0, prev - 10));
-
         if (key.ctrl && inputChars === 'p') {
           if (history.length > 0) {
             const nextIndex = Math.min(historyIndex + 1, history.length - 1);
@@ -186,6 +252,7 @@ export function useChatState({ mode, model, onExit }) {
     currentSummaryRef.current = mergeSummary(currentSummaryRef.current, partial);
   }, []);
 
+
   const pushActivity = useCallback((kind, text, metadata = null) => {
     if (!text || (typeof text === 'string' && !text.trim())) return;
 
@@ -211,6 +278,17 @@ export function useChatState({ mode, model, onExit }) {
     setActivityLog([...currentActivityRef.current]);
   }, []);
 
+  const resolvePendingQuestionAnswer = useCallback((answer) => {
+    pushActivity('success', `Answer: ${answer}`);
+
+    const resolver = questionResolverRef.current;
+    questionResolverRef.current = null;
+    setPendingQuestion(null);
+    setPendingQuestionIndex(0);
+    setInput('');
+    if (typeof resolver === 'function') resolver(answer);
+  }, [pushActivity]);
+
   const resetRunState = useCallback((label) => {
     if (liveStatusTimeoutRef.current) {
       clearTimeout(liveStatusTimeoutRef.current);
@@ -218,9 +296,11 @@ export function useChatState({ mode, model, onExit }) {
     }
     currentActivityRef.current = [];
     currentSummaryRef.current = DEFAULT_SUMMARY;
+    activeToolPhaseRef.current = '';
     setStreamLabel(label);
     setStreamResponseContent('');
     setActivityLog([]);
+    setFollowLive(true);
     setScrollOffset(0);
     setCurrentTurn(1);
     setLiveStatus({ kind: 'thinking', label });
@@ -241,6 +321,43 @@ export function useChatState({ mode, model, onExit }) {
       liveStatusTimeoutRef.current = null;
     }, status === 'error' ? 1600 : 1200);
   }, []);
+
+  const stopActiveRun = useCallback(() => {
+    if (!isThinkingRef.current || !abortControllerRef.current) return false;
+
+    activeRunTokenRef.current += 1;
+    abortControllerRef.current.abort();
+    abortControllerRef.current = null;
+
+    const archivedActivity = [...currentActivityRef.current];
+    const partialText = streamResponseContent.trim();
+
+    setMessages((previous) => {
+      const nextMessages = [...previous];
+      if (archivedActivity.length > 0 || partialText) {
+        nextMessages.push({
+          type: 'assistant',
+          text: partialText,
+          id: nextId(),
+          activityLog: archivedActivity,
+        });
+      }
+      nextMessages.push({
+        type: 'system',
+        text: 'Response stopped by user.',
+        id: nextId(),
+      });
+      return nextMessages;
+    });
+
+    currentActivityRef.current = [];
+    activeToolPhaseRef.current = '';
+    setActivityLog([]);
+    setStreamResponseContent('');
+    setFollowLive(true);
+    finishRun('error', 'Stopped by user');
+    return true;
+  }, [finishRun, nextId, streamResponseContent]);
 
   const appendMessage = useCallback((type, text, extra = {}) => {
     setMessages((previous) => [...previous, { type, text, id: nextId(), ...extra }]);
@@ -399,19 +516,33 @@ export function useChatState({ mode, model, onExit }) {
       setStreamLabel(label || `${activeMode.label} running`);
     },
     phaseStatus: ({ status, text }) => {
-      if (text) setStreamLabel(text);
+      const isGenericPhaseText = /^Turn \d+ - Thinking\.\.\.$/.test(text || '')
+        || /^Turn \d+ [—-] Response received$/.test(text || '');
+      if (text && !(isGenericPhaseText && activeToolPhaseRef.current)) {
+        setStreamLabel(text);
+      }
       if (status === 'error') pushActivity('error', text || 'Phase failed');
     },
     toolExecution: ({ toolName, args, argsObject }) => {
       const displayTool = getToolDisplayName(toolName);
       const cleanArgs = formatToolArgs(toolName, args, argsObject);
-      setStreamLabel(getToolPhaseLabel(toolName));
+      const phaseLabel = getToolPhaseLabel(toolName);
+      activeToolPhaseRef.current = phaseLabel;
+      setStreamLabel(phaseLabel);
       pushActivity('tool', `${displayTool}(${truncate(cleanArgs, 50)})`);
     },
-    toolResult: ({ toolName, text, fullText, isCollapsible }) => {
+    toolResult: ({ toolName, text, fullText, isCollapsible, args }) => {
+      const inlineDetails = shouldInlineToolDetails(toolName);
+      const detailText = inlineDetails
+        ? buildInlineToolDetailText(toolName, text, fullText, args)
+        : buildInlineDetailText(fullText);
       const displayText = (text && text.trim()) ? text : (isCollapsible && fullText ? `${toolName || 'Result'} (${fullText.split('\n').length} lines)` : '');
       if (displayText) {
-        pushActivity('status', displayText, { isCollapsible, fullText });
+        pushActivity('status', displayText, {
+          isCollapsible: !inlineDetails && isCollapsible,
+          fullText: detailText,
+          inlineDetails,
+        });
       }
     },
     fileChange: (change) => {
@@ -446,11 +577,8 @@ export function useChatState({ mode, model, onExit }) {
     },
     askUser: ({ question, options, title }) => {
       return new Promise((resolve) => {
-        let displayText = question;
-        if (options && options.length > 0) {
-          displayText = question + '\n\n' + options.map((opt, i) => `> ${i + 1}. ${opt}`).join('\n');
-        }
-        setPendingQuestion({ question: displayText, options: options || [], title: title || 'Action Required' });
+        setPendingQuestion({ question, options: options || [], title: title || 'Action Required' });
+        setPendingQuestionIndex(0);
         questionResolverRef.current = resolve;
       });
     },
@@ -700,6 +828,8 @@ export function useChatState({ mode, model, onExit }) {
   }, [model, nextId]);
 
   const executeHandler = useCallback(async (query, activeMode = mode) => {
+    const runToken = activeRunTokenRef.current + 1;
+    activeRunTokenRef.current = runToken;
     setIsThinking(true);
     resetRunState(`${activeMode.label} running`);
     const reporter = buildReporter(activeMode);
@@ -717,6 +847,7 @@ export function useChatState({ mode, model, onExit }) {
       }
 
       if (resultMsg?.planFollowup === 'implement') {
+        if (activeRunTokenRef.current !== runToken) return;
         setMessages((previous) => [...previous, resultMsg]);
         const implMode = { ...activeMode, label: 'Code', value: 'agent' };
         const implReporter = buildReporter(implMode);
@@ -726,6 +857,7 @@ export function useChatState({ mode, model, onExit }) {
       }
 
       if (resultMsg?.planFollowup === 'revise') {
+        if (activeRunTokenRef.current !== runToken) return;
         setMessages((previous) => [...previous, resultMsg]);
         const reviseResult = await runAgentMode(resultMsg.text, [...msgSnapshot, resultMsg], activeMode, reporter);
         if (reviseResult) reviseResult.activityLog = [...currentActivityRef.current];
@@ -745,6 +877,7 @@ export function useChatState({ mode, model, onExit }) {
       else if (!finalLabel || finalLabel.endsWith('complete')) finalLabel = `${activeMode.label} failed`;
     }
 
+    if (activeRunTokenRef.current !== runToken) return;
     setMessages((previous) => [...previous, resultMsg]);
     finishRun(finalStatus, finalLabel);
     setInput('');
@@ -767,32 +900,13 @@ export function useChatState({ mode, model, onExit }) {
 
   const handleSubmit = useCallback(async (value) => {
     if (pendingQuestion && questionResolverRef.current) {
+      if (Array.isArray(pendingQuestion.options) && pendingQuestion.options.length > 0) {
+        resolvePendingQuestionAnswer(pendingQuestion.options[pendingQuestionIndex] || pendingQuestion.options[0]);
+        return;
+      }
       const trimmed = value.trim();
       if (!trimmed) return;
-      const options = typeof pendingQuestion === 'object' && pendingQuestion.options ? pendingQuestion.options : [];
-      const optionMatch = trimmed.match(/^(\d+)$/);
-
-      let answer = trimmed;
-      if (optionMatch && options.length > 0) {
-        const idx = parseInt(optionMatch[1], 10) - 1;
-        if (idx >= 0 && idx < options.length) answer = options[idx];
-      } else if (options.length > 0) {
-        const lowerInput = trimmed.toLowerCase();
-        for (const opt of options) {
-          if (opt.toLowerCase() === lowerInput) {
-            answer = opt;
-            break;
-          }
-        }
-      }
-
-      pushActivity('success', `Answer: ${answer}`);
-
-      const resolver = questionResolverRef.current;
-      questionResolverRef.current = null;
-      setPendingQuestion(null);
-      setInput('');
-      resolver(answer);
+      resolvePendingQuestionAnswer(trimmed);
       return;
     }
 
@@ -867,7 +981,7 @@ export function useChatState({ mode, model, onExit }) {
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [appendMessage, executeHandler, mode, nextId, onExit, pendingQuestion, pushActivity, resolveBuildCommand, runGitShortcut, runUndoShortcut, toggleLatestCollapsible]);
+  }, [appendMessage, executeHandler, mode, nextId, onExit, pendingQuestion, pendingQuestionIndex, resolveBuildCommand, resolvePendingQuestionAnswer, runGitShortcut, runUndoShortcut, toggleLatestCollapsible]);
 
   return {
     dims,
@@ -877,7 +991,10 @@ export function useChatState({ mode, model, onExit }) {
     elapsedTime,
     currentTurn,
     showQuestions, setShowQuestions,
+    showShortcuts, setShowShortcuts,
+    followLive, setFollowLive,
     scrollOffset,
+    setScrollOffset,
     expandedBlocks,
     streamLabel,
     streamResponseContent,
@@ -885,11 +1002,13 @@ export function useChatState({ mode, model, onExit }) {
     liveTick,
     liveStatus,
     pendingQuestion,
+    pendingQuestionIndex,
     planFollowup, setPlanFollowup, planFollowupResolverRef,
     currentActivityRef,
     visibleCollapsibleIdRef,
     handleSubmit,
     toggleLatestCollapsible,
     pushActivity,
+    stopActiveRun,
   };
 }

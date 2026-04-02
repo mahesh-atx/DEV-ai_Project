@@ -36,7 +36,7 @@ export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {
         }
     };
 
-    if (entry.metadata?.isCollapsible && !isExpanded) {
+    if (entry.metadata?.isCollapsible && !entry.metadata?.inlineDetails && !isExpanded) {
         hintText = { text: ' (ctrl+r / alt+r / /expand)', color: COLORS.dim };
     }
 
@@ -89,7 +89,14 @@ export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {
         }
     });
 
-    if (entry.metadata?.isCollapsible && isExpanded && entry.metadata.fullText) {
+    if (entry.metadata?.inlineDetails && entry.metadata.fullText) {
+        wrapText(entry.metadata.fullText, maxW - 6).forEach(el => {
+            pushEntryLine({ segments: [
+                { text: '      ', color: COLORS.dim },
+                { text: el, color: COLORS.dim }
+            ]});
+        });
+    } else if (entry.metadata?.isCollapsible && isExpanded && entry.metadata.fullText) {
         wrapText(entry.metadata.fullText, maxW - 4).forEach(el => {
             pushEntryLine({ segments: [
                 { text: '      ', color: COLORS.dim },
@@ -101,7 +108,7 @@ export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {
     if (entry.metadata?.diffPreview && entry.metadata.diffPreview.length > 0) {
         entry.metadata.diffPreview.forEach(diff => {
             let bgColor = undefined;
-            let fgColor = COLORS.white;
+            let fgColor = COLORS.dim;
 
             if (diff.type === 'removed') {
                 bgColor = COLORS.darkRed;

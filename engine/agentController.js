@@ -1165,9 +1165,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                     }
                   } else if (line.trim() === '' && currentFile && currentContent !== '') {
                     // End of file block - write the file
-                    const fullPath = join(PROJECT_ROOT, currentFile);
-                    mkdirSync(dirname(fullPath), { recursive: true });
-                    writeFileSync(fullPath, currentContent);
+                    runtime.patchFile(currentFile, currentContent, undefined, { reporter, silent: true });
                     filesChanged++;
                     currentFile = null;
                     currentContent = '';
@@ -1176,9 +1174,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                 
                 // Handle last file if no trailing blank line
                 if (currentFile && currentContent !== '') {
-                  const fullPath = join(PROJECT_ROOT, currentFile);
-                  mkdirSync(dirname(fullPath), { recursive: true });
-                  writeFileSync(fullPath, currentContent);
+                  runtime.patchFile(currentFile, currentContent, undefined, { reporter, silent: true });
                   filesChanged++;
                 }
                 
@@ -1255,6 +1251,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           text: summarizeToolResult(normalizedToolName, toolResultStr, normalizedArgs),
           fullText: String(toolResultStr || ""),
           isCollapsible: shouldCollapseToolResult(toolResultStr),
+          args: normalizedArgs,
         });
 
         agentMessages.push({

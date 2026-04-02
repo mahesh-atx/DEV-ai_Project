@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Text } from 'ink';
 import TextInput from 'ink-text-input';
 import SelectInput from 'ink-select-input';
@@ -23,7 +23,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
     isThinking,
     elapsedTime,
     showQuestions,
+    showShortcuts,
+    followLive,
     scrollOffset,
+    setScrollOffset,
     expandedBlocks,
     streamLabel,
     streamResponseContent,
@@ -31,6 +34,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     liveTick,
     liveStatus,
     pendingQuestion,
+    pendingQuestionIndex,
     planFollowup, setPlanFollowup, planFollowupResolverRef,
     currentActivityRef,
     visibleCollapsibleIdRef,
@@ -59,6 +63,25 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
   const spinnerFrame = SPINNER_FRAMES[liveTick % SPINNER_FRAMES.length];
   const showStreamingCursor = liveTick % 2 === 0;
+  const modeIcon = mode?.value === 'ask'
+    ? '?'
+    : mode?.value === 'planner'
+      ? '#'
+      : mode?.value === 'polish'
+        ? '+'
+        : mode?.value === 'orchestrator'
+          ? '@'
+          : '>';
+  const modelLabel = truncate(model?.name || model?.id || 'Unknown model', 28);
+  const shortcuts = [
+    '?: shortcuts',
+    'Esc: stop run or close shortcuts',
+    'Up/Down: scroll',
+    'PgUp/PgDn: faster scroll',
+    'Home/End: oldest or live tail',
+    'Ctrl+Q: history',
+    '/build, /git <msg>, undo',
+  ];
   const activeToolEntryId = useMemo(() => (
     isThinking ? findLatestLiveToolEntryId(activityLog) : null
   ), [activityLog, isThinking]);
@@ -75,6 +98,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
       : spinnerFrame;
 
   const maxLineWidth = Math.max(20, dims.columns - 4);
+  const previousLineCountRef = useRef(0);
   const allLines = useMemo(() => {
     let lines = [];
 
@@ -91,7 +115,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
             lines.push({ segments: [], empty: true });
          }
       } else if (msg.type === 'user') {
-         addTextWrapped(`> ${msg.text}`, COLORS.white, true);
+         wrapText(msg.text, maxLineWidth - 2).forEach((l, i) => {
+           if (i === 0) {
+             lines.push({ segments: [{ text: '> ', color: COLORS.orange, bold: true }, { text: l, color: COLORS.white, bold: true }] });
+           } else {
+             lines.push({ segments: [{ text: '  ' }, { text: l, color: COLORS.white, bold: true }] });
+           }
+         });
          lines.push({ segments: [], empty: true });
       } else {
          if (msg.activityLog && msg.activityLog.length > 0) {
@@ -176,8 +206,17 @@ const ChatScreen = ({ mode, model, onExit }) => {
     return lines;
   }, [messages, isThinking, activityLog, streamResponseContent, maxLineWidth, expandedBlocks, activeToolEntryId, showStreamingCursor, spinnerFrame]);
 
+  useEffect(() => {
+    const previousCount = previousLineCountRef.current;
+    if (!followLive && allLines.length > previousCount) {
+      setScrollOffset((prev) => prev + (allLines.length - previousCount));
+    }
+    previousLineCountRef.current = allLines.length;
+  }, [allLines.length, followLive, setScrollOffset]);
+
   let uiReservedLines = 4;
   if (visibleLiveStatus) uiReservedLines += 2;
+  if (showShortcuts) uiReservedLines += shortcuts.length + 4;
 
   if (pendingQuestion) {
       const qStr = typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question;
@@ -185,6 +224,9 @@ const ChatScreen = ({ mode, model, onExit }) => {
       qStr.split('\n').forEach(line => {
         qLinesCount += wrapText(line, dims.columns - 4).length;
       });
+      if (pendingQuestion.options?.length > 0) {
+        qLinesCount += pendingQuestion.options.length + 1;
+      }
       uiReservedLines += 3 + qLinesCount;
   }
   if (planFollowup) uiReservedLines += 5;
@@ -257,10 +299,19 @@ const ChatScreen = ({ mode, model, onExit }) => {
         <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} paddingX={1} marginX={1} marginBottom={1}>
           <Text color={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} bold>{pendingQuestion.title || 'Action Required'}</Text>
           <Box flexDirection="column" marginTop={1} marginBottom={0}>
-            {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => {
-              const isOption = line.trim().startsWith('>');
-              return <Text key={i} color={isOption ? COLORS.white : COLORS.dim} bold={isOption}>{line}</Text>;
-            })}
+            {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => (
+              <Text key={i} color={COLORS.dim}>{line}</Text>
+            ))}
+            {pendingQuestion.options?.length > 0 ? (
+              <Box flexDirection="column" marginTop={1}>
+                {pendingQuestion.options.map((option, index) => (
+                  <Text key={option} color={index === pendingQuestionIndex ? COLORS.white : COLORS.dim} bold={index === pendingQuestionIndex}>
+                    {index === pendingQuestionIndex ? '› ' : '  '}{option}
+                  </Text>
+                ))}
+                <Text color={COLORS.dim}>Use arrows and Enter</Text>
+              </Box>
+            ) : null}
           </Box>
         </Box>
       )}
@@ -294,17 +345,41 @@ const ChatScreen = ({ mode, model, onExit }) => {
                 if (!isThinking || pendingQuestion) setInput(val);
               }}
               onSubmit={handleSubmit}
-              placeholder={pendingQuestion ? (pendingQuestion.options?.length > 0 ? 'Type a number or your answer...' : 'Type your answer...') : ''}
-              focus={!isThinking || pendingQuestion}
+              placeholder={pendingQuestion ? (pendingQuestion.options?.length > 0 ? '' : 'Type your answer...') : ''}
+              focus={!isThinking || (pendingQuestion && (!pendingQuestion.options || pendingQuestion.options.length === 0))}
               showCursor
             />
           </Box>
         </Box>
       </Box>
 
+      {showShortcuts && (
+        <Box flexDirection="column" borderStyle="round" borderColor={COLORS.dim} paddingX={1} marginX={1} marginTop={1} marginBottom={1}>
+          <Text color={COLORS.white} bold>Shortcuts</Text>
+          {shortcuts.map((shortcut) => (
+            <Text key={shortcut} color={COLORS.dim}>{shortcut}</Text>
+          ))}
+        </Box>
+      )}
+
       {/* Footer */}
       <Box flexDirection="row" justifyContent="space-between" paddingX={1}>
-        <Text color={COLORS.dim}>? for shortcuts</Text>
+        <Box flexDirection="row">
+          {showShortcuts ? (
+            <Text color={COLORS.dim}>Esc to close shortcuts</Text>
+          ) : (
+            <>
+              <Text color={COLORS.orange}>?</Text>
+              <Text color={COLORS.dim}> for shortcuts</Text>
+            </>
+          )}
+        </Box>
+        <Box flexDirection="row">
+          <Text color={COLORS.orange}>{modeIcon}</Text>
+          <Text color={COLORS.dim}>{` ${mode?.label || 'Mode'}   `}</Text>
+          <Text color={COLORS.orange}>*</Text>
+          <Text color={COLORS.dim}>{` ${modelLabel}`}</Text>
+        </Box>
       </Box>
 
     </Box>

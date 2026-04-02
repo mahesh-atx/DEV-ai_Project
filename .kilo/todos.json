@@ -1,0 +1,17 @@
+[
+  {
+    "content": "Setup test environment",
+    "status": "pending",
+    "priority": "high"
+  },
+  {
+    "content": "Run tool tests",
+    "status": "pending",
+    "priority": "high"
+  },
+  {
+    "content": "Clean up test files",
+    "status": "pending",
+    "priority": "medium"
+  }
+]

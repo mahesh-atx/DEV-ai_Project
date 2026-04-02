@@ -253,6 +253,62 @@ export function getToolPhaseLabel(toolName) {
   }
 }
 
+export function shouldInlineToolDetails(toolName) {
+  switch (toolName) {
+    case 'read':
+    case 'read_file':
+    case 'list':
+    case 'list_files':
+    case 'glob':
+    case 'search_files':
+    case 'grep':
+    case 'search_content':
+    case 'webfetch':
+    case 'todoread':
+    case 'lsp':
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function buildInlineDetailText(text, maxLines = 40) {
+  const value = String(text || '').replace(/\r\n/g, '\n').trimEnd();
+  if (!value) return '';
+
+  const lines = value.split('\n');
+  if (lines.length <= maxLines) return value;
+
+  const visibleLines = lines.slice(0, maxLines);
+  const hiddenCount = lines.length - maxLines;
+  visibleLines.push(`... ${hiddenCount} more line${hiddenCount === 1 ? '' : 's'}`);
+  return visibleLines.join('\n');
+}
+
+export function buildInlineToolDetailText(toolName, text, fullText, args = {}, maxLines = 40) {
+  if (toolName === 'read' || toolName === 'read_file') {
+    return firstNonEmptyValue([args.path, args.filePath]);
+  }
+
+  if (toolName === 'list' || toolName === 'list_files') {
+    const value = String(fullText || '').replace(/\r\n/g, '\n').trim();
+    if (!value) return '';
+    const lines = value.split('\n');
+    const entries = lines[0] === 'Entries:' ? lines.slice(1) : lines;
+    return buildInlineDetailText(entries.join('\n'), maxLines);
+  }
+
+  if (toolName === 'glob' || toolName === 'search_files') {
+    const value = String(fullText || '').replace(/\r\n/g, '\n').trim();
+    if (!value) return '';
+    const lines = value.split('\n');
+    const entries = lines[0] === 'Found files:' ? lines.slice(1) : lines;
+    return buildInlineDetailText(entries.join('\n'), maxLines);
+  }
+
+  return buildInlineDetailText(fullText, maxLines);
+}
+
 export function formatToolArgs(toolName, rawArgs, argsObject) {
   const parsed = (argsObject && typeof argsObject === 'object') ? argsObject : parseToolArguments(rawArgs);
   const pick = (...values) => firstNonEmptyValue(values);
@@ -286,7 +342,7 @@ export function formatToolArgs(toolName, rawArgs, argsObject) {
       return pick(parsed.url, rawArgs);
     case 'question':
     case 'ask_user':
-      return pick(parsed.question, parsed.questions?.[0]?.question, rawArgs);
+      return 'Clarification';
     case 'finish_task':
       return pick(parsed.message, 'done');
     case 'lsp':
