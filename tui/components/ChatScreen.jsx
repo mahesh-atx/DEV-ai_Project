@@ -9,7 +9,6 @@ import { MODES, THEME } from '../constants.js';
 import { createTuiReporter } from '../uiReporter.js';
 import { createClient } from '../../config/apiClient.js';
 
-const THINKING_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MODE_MAP = Object.fromEntries(MODES.map((mode) => [mode.value, mode]));
 const DEFAULT_SUMMARY = {
   filesCreated: 0,
@@ -18,6 +17,20 @@ const DEFAULT_SUMMARY = {
   errors: 0,
   duration: '0.0s',
   loopCount: 0,
+};
+
+// UI Specific Colors matching the reference images
+const COLORS = {
+  green: '#4ADE80',
+  darkGreen: '#143C22',
+  red: '#F87171',
+  darkRed: '#451A1A',
+  blue: '#60A5FA',
+  orange: '#D97757',
+  dim: '#71717A',
+  code: '#E5C07B',
+  white: '#F9FAFB',
+  highlight: '#27272A' // Used for expanded blocks background
 };
 
 function stripAnsi(text) {
@@ -88,9 +101,18 @@ function mergeSummary(previous, next) {
 function summarizeFileChange(change) {
   const path = change?.path || 'unknown';
   if (change?.status === 'error') return `Failed ${path}${change.detail ? ` - ${change.detail}` : ''}`;
+  
+  if (change?.action === 'edit' || change?.action === 'patch') {
+    const adds = change?.additions !== undefined ? change.additions : (change.applied || 0);
+    const rems = change?.removals !== undefined ? change.removals : 0;
+    
+    if (adds > 0 || rems > 0) {
+      return `Updated ${path} with ${adds} addition${adds !== 1 ? 's' : ''} and ${rems} removal${rems !== 1 ? 's' : ''}`;
+    }
+    return `Updated ${path}`;
+  }
+
   if (change?.action === 'create') return `Created ${path}`;
-  if (change?.action === 'edit') return `Edited ${path} (${change.applied || 0} applied)`;
-  if (change?.action === 'patch') return `Patched ${path}`;
   if (change?.action === 'noop') return `Unchanged ${path}`;
   return `Updated ${path}`;
 }
@@ -108,7 +130,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   ]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
-  const [thinkFrame, setThinkFrame] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState(0);
   const [currentTurn, setCurrentTurn] = useState(1);
   const [customBuildCmd, setCustomBuildCmd] = useState('');
   
@@ -116,6 +138,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [showQuestions, setShowQuestions] = useState(false);
   const [scrollOffset, setScrollOffset] = useState(0);
+
+  const [expandedBlocks, setExpandedBlocks] = useState(new Set());
 
   const [streamLabel, setStreamLabel] = useState('Waiting for input');
   const [streamResponseContent, setStreamResponseContent] = useState('');
@@ -126,7 +150,6 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [planFollowup, setPlanFollowup] = useState(null);
   const planFollowupResolverRef = useRef(null);
 
-  const startTimeRef = useRef(null);
   const clientRef = useRef(null);
   const isThinkingRef = useRef(false);
   const msgIdCounter = useRef(0);
@@ -153,10 +176,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
   }, [isThinking]);
 
   useEffect(() => {
-    if (!isThinking) return undefined;
+    if (!isThinking) {
+      setElapsedTime(0);
+      return undefined;
+    }
     const timer = setInterval(() => {
-      setThinkFrame((frame) => (frame + 1) % THINKING_FRAMES.length);
-    }, 80);
+      setElapsedTime(prev => prev + 1);
+    }, 1000);
     return () => clearInterval(timer);
   }, [isThinking]);
 
@@ -175,10 +201,47 @@ const ChatScreen = ({ mode, model, onExit }) => {
         setShowQuestions(false);
         return;
       }
+      
+      if (key.ctrl && inputChars === 'r') {
+        let targetId = null;
+        
+        for (let i = currentActivityRef.current.length - 1; i >= 0; i--) {
+            if (currentActivityRef.current[i].metadata?.isCollapsible) {
+                targetId = currentActivityRef.current[i].id;
+                break;
+            }
+        }
+        
+        if (!targetId) {
+            for (let i = messages.length - 1; i >= 0 && !targetId; i--) {
+                const msg = messages[i];
+                if (msg.activityLog) {
+                    for (let j = msg.activityLog.length - 1; j >= 0; j--) {
+                        if (msg.activityLog[j].metadata?.isCollapsible) {
+                            targetId = msg.activityLog[j].id;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (targetId) {
+            setExpandedBlocks(prev => {
+                const next = new Set(prev);
+                if (next.has(targetId)) next.delete(targetId);
+                else next.add(targetId);
+                return next;
+            });
+        }
+        return;
+      }
+
       if (key.ctrl && inputChars === 'q') {
         setShowQuestions((prev) => !prev);
         return;
       }
+      
       if (!showQuestions) {
         if (key.upArrow) setScrollOffset((prev) => prev + 1);
         if (key.downArrow) setScrollOffset((prev) => Math.max(0, prev - 1));
@@ -215,11 +278,28 @@ const ChatScreen = ({ mode, model, onExit }) => {
     currentSummaryRef.current = mergeSummary(currentSummaryRef.current, partial);
   }, []);
 
-  const pushActivity = useCallback((kind, text) => {
-    // Claude code keeps complete traces in memory, so no slicing here
-    const message = text.replace(/\n/g, ' ').trim(); // keep it single line
-    if (!message) return;
-    currentActivityRef.current = [...currentActivityRef.current, { kind, text: truncate(message, 140) }];
+  const pushActivity = useCallback((kind, text, metadata = null) => {
+    if (!text || (typeof text === 'string' && !text.trim())) return;
+    
+    let displayText;
+    if (kind === 'chat') {
+        displayText = text;
+    } else {
+        const message = text.replace(/\n/g, ' ').trim();
+        displayText = truncate(message, 140);
+    }
+    
+    if (!displayText) return;
+
+    currentActivityRef.current = [
+        ...currentActivityRef.current, 
+        { 
+            id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            kind, 
+            text: displayText,
+            metadata 
+        }
+    ];
     setActivityLog([...currentActivityRef.current]);
   }, []);
 
@@ -253,32 +333,41 @@ const ChatScreen = ({ mode, model, onExit }) => {
       else if (toolName === 'write_file') displayTool = 'Write';
       else if (toolName === 'search_files') displayTool = 'Search';
       else if (toolName === 'ask_user') displayTool = 'Ask';
-      
+
       let cleanArgs = args || '';
       if (typeof cleanArgs === 'string' && cleanArgs.startsWith('{')) {
-          try { 
-              const p = JSON.parse(cleanArgs); 
-              if (toolName === 'run_command' && p.command) cleanArgs = p.command;
-              else if (toolName === 'write_file' && p.path) cleanArgs = p.path;
-              else if (toolName === 'read_file' && p.path) cleanArgs = p.path;
-              else cleanArgs = Object.values(p)[0] || ''; 
-          } catch(e){}
+        try {
+          const p = JSON.parse(cleanArgs);
+          if (toolName === 'run_command' && p.command) cleanArgs = p.command;
+          else if (toolName === 'write_file' && p.path) cleanArgs = p.path;
+          else if (toolName === 'read_file' && p.path) cleanArgs = p.path;
+          else cleanArgs = Object.values(p)[0] || '';
+        } catch(e){}
       }
       pushActivity('tool', `${displayTool}(${truncate(cleanArgs, 50)})`);
     },
-    toolResult: ({ toolName, text }) => {
-      if (text && text.trim()) {
-        pushActivity('status', text);
+    toolResult: ({ toolName, text, fullText, isCollapsible }) => {
+      const displayText = (text && text.trim()) ? text : (isCollapsible && fullText ? `${toolName || 'Result'} (${fullText.split('\n').length} lines)` : '');
+      if (displayText) {
+        pushActivity('status', displayText, { isCollapsible, fullText });
       }
     },
     fileChange: (change) => {
-      pushActivity(change.status === 'error' ? 'error' : 'success', summarizeFileChange(change));
+      pushActivity(
+        change.status === 'error' ? 'error' : 'success',
+        summarizeFileChange(change),
+        { diffPreview: change.diffPreview }
+      );
     },
     commandPreview: ({ command }) => {
-       pushActivity('command', `Bash(${truncate(command, 60)})`);
+      pushActivity('command', `Bash(${truncate(command, 60)})`);
     },
-    commandResult: ({ outcome, preview }) => {
-       pushActivity(outcome === 'failed' || outcome === 'blocked' ? 'error' : 'status', preview || outcome);
+    commandResult: ({ outcome, preview, fullText, isCollapsible }) => {
+      pushActivity(
+        outcome === 'failed' || outcome === 'blocked' ? 'error' : 'status',
+        preview || outcome,
+        { isCollapsible, fullText }
+      );
     },
     summary: (partial) => {
       updateSummary(partial);
@@ -287,7 +376,11 @@ const ChatScreen = ({ mode, model, onExit }) => {
       }
     },
     log: ({ level, message }) => {
-      pushActivity(level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'status', message);
+      if (level === 'chat') {
+        pushActivity('chat', message);
+      } else {
+        pushActivity(level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'status', message);
+      }
     },
     askUser: ({ question, options, title }) => {
       return new Promise((resolve) => {
@@ -299,9 +392,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
         questionResolverRef.current = resolve;
       });
     },
-  }), [pushActivity, updateSummary]);
+  }), [pushActivity, updateSummary, nextId]);
 
-  // Standard LLM Execution logic wrappers
   const runAskMode = useCallback(async (query, msgHistory) => {
     const client = clientRef.current;
     if (!client) return { type: 'system', text: 'API client is not configured.', id: nextId() };
@@ -363,6 +455,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
       callAI: async (agentMessages, tools = undefined) => {
         let replyContent = '';
         const toolCalls = [];
+        setStreamResponseContent('');
+
         const stream = await client.chat.completions.create({
           model: model.id, messages: agentMessages, temperature: model.temperature,
           top_p: model.topP, max_tokens: model.maxTokens, stream: true, tools, ...model.extraParams,
@@ -388,6 +482,13 @@ const ChatScreen = ({ mode, model, onExit }) => {
             }
           }
         }
+        
+        // INTERLEAVING FIX: Push finished conversational text immediately into the trace
+        if (replyContent.trim()) {
+            reporter.log({ level: 'chat', message: replyContent.trim() });
+        }
+        setStreamResponseContent('');
+
         return { role: 'assistant', content: replyContent || null, tool_calls: toolCalls.length > 0 ? toolCalls.filter(Boolean) : undefined };
       },
       readFile: (filePath) => fs.readFileSync(path.resolve(projectDir, filePath.replace(/^\/+/, '')), 'utf8'),
@@ -445,7 +546,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
             stdout += text;
             const lines = text.split('\n').filter(l => l.trim());
             for (const line of lines) {
-              pushActivity('status', truncate(line, 100));
+              pushActivity('status', truncate(line, 100)); // Only logs actual terminal output now
             }
           });
 
@@ -537,7 +638,6 @@ const ChatScreen = ({ mode, model, onExit }) => {
       if (activeMode.value === 'ask') resultMsg = await runAskMode(query, msgSnapshot);
       else resultMsg = await runAgentMode(query, msgSnapshot, activeMode, reporter);
 
-      // Attach tool trace to the message so it stays in scrollback
       if (resultMsg && currentActivityRef.current.length > 0) {
           resultMsg.activityLog = [...currentActivityRef.current];
       }
@@ -587,7 +687,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
         }
       }
       
-      setMessages((previous) => [...previous, { type: 'user', text: answer, id: nextId() }]);
+      pushActivity('success', `Answer: ${answer}`); // Native inline display
+      
       const resolver = questionResolverRef.current;
       questionResolverRef.current = null;
       setPendingQuestion(null);
@@ -626,7 +727,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [executeHandler, mode, nextId, onExit, pendingQuestion]);
+  }, [executeHandler, mode, nextId, onExit, pendingQuestion, pushActivity]);
 
   const handleQuestionSelect = useCallback((item) => {
     setShowQuestions(false);
@@ -641,108 +742,219 @@ const ChatScreen = ({ mode, model, onExit }) => {
     return items;
   }, [history]);
 
-  // Unified rendering engine to simulate Claude Code inline logging
+  const renderActivityEntry = (entry, linesArray, maxW) => {
+      // INTERLEAVING RENDERER: Renders pure conversational text elegantly inline
+      if (entry.kind === 'chat') {
+          let inCodeBlock = false;
+          wrapText(entry.text, maxW - 2).forEach((l, i) => {
+              if (l.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
+              let color = inCodeBlock ? COLORS.code : COLORS.white;
+              if (i === 0) {
+                  linesArray.push({ segments: [{ text: '● ', color: COLORS.white }, { text: l, color }] });
+              } else {
+                  linesArray.push({ segments: [{ text: '  ' }, { text: l, color }] });
+              }
+          });
+          linesArray.push({ segments: [], empty: true });
+          return;
+      }
+
+      const isSub = entry.kind === 'status' || entry.kind === 'success' || entry.kind === 'error';
+      const isTool = entry.kind === 'tool' || entry.kind === 'command';
+      const isExpanded = expandedBlocks.has(entry.id);
+      const icon = isSub ? '  └ ' : '● ';
+      
+      let mainText = entry.text;
+      let hintText = null;
+
+      if (entry.metadata?.isCollapsible && !isExpanded) {
+          hintText = { text: ' (ctrl+r to expand)', color: COLORS.dim };
+      }
+
+      wrapText(`${icon}${mainText}`, maxW).forEach((l, i) => {
+          if (i === 0) {
+              if (isTool) {
+                  const rawText = l.slice(2);
+                  const match = rawText.match(/^([A-Za-z0-9_]+)\((.*)\)$/);
+                  if (match) {
+                      linesArray.push({ segments: [
+                          { text: '● ', color: COLORS.green },
+                          { text: match[1], bold: true, color: COLORS.white },
+                          { text: '(', color: COLORS.dim },
+                          { text: match[2], color: COLORS.dim },
+                          { text: ')', color: COLORS.dim }
+                      ]});
+                  } else {
+                      linesArray.push({ segments: [{ text: '● ', color: COLORS.green }, { text: rawText, bold: true, color: COLORS.white }] });
+                  }
+              } else if (isSub) {
+                  const textColor = entry.kind === 'error' ? COLORS.red : COLORS.white;
+                  const segs = [
+                      { text: '  └ ', color: COLORS.dim }, 
+                      { text: l.slice(4), color: textColor }
+                  ];
+                  if (hintText) segs.push(hintText);
+                  linesArray.push({ segments: segs });
+              } else {
+                  linesArray.push({ segments: [{ text: l, color: COLORS.dim }] });
+              }
+          } else {
+              linesArray.push({ segments: [{ text: isSub ? `    ${l.trimStart()}` : `  ${l.trimStart()}`, color: COLORS.dim }] });
+          }
+      });
+
+      if (entry.metadata?.isCollapsible && isExpanded && entry.metadata.fullText) {
+          wrapText(entry.metadata.fullText, maxW - 4).forEach(el => {
+              linesArray.push({ segments: [
+                  { text: '      ', color: COLORS.dim },
+                  { text: el, color: COLORS.white, backgroundColor: COLORS.highlight }
+              ]});
+          });
+      }
+
+      if (entry.metadata?.diffPreview && entry.metadata.diffPreview.length > 0) {
+          entry.metadata.diffPreview.forEach(diff => {
+              let bgColor = undefined;
+              let fgColor = COLORS.white;
+              
+              if (diff.type === 'removed') { 
+                  bgColor = COLORS.darkRed; 
+                  fgColor = COLORS.red; 
+              } else if (diff.type === 'added') { 
+                  bgColor = COLORS.darkGreen; 
+                  fgColor = COLORS.green; 
+              }
+
+              const lineNumStr = (diff.lineNum || ' ').padEnd(5, ' ');
+              
+              linesArray.push({ segments: [
+                  { text: '      ' },
+                  { text: lineNumStr, color: COLORS.dim },
+                  { text: diff.text, color: fgColor, backgroundColor: bgColor }
+              ]});
+          });
+      }
+  };
+
   const maxLineWidth = Math.max(20, dims.columns - 4);
   const allLines = useMemo(() => {
     let lines = [];
 
+    const addTextWrapped = (text, defaultColor = COLORS.white, isBold = false) => {
+       wrapText(text, maxLineWidth).forEach(l => {
+           lines.push({ segments: [{ text: l, color: defaultColor, bold: isBold }] });
+       });
+    };
+
     messages.forEach((msg) => {
       if (msg.type === 'system') {
-         if (msg.id === 'init') {
-            // We now use a fixed header instead of an inline init message, so we skip it here.
-            return;
-         } else {
-            wrapText(msg.text, maxLineWidth).forEach(l => lines.push({ text: l, color: THEME.dim }));
+         if (msg.id !== 'init') {
+            addTextWrapped(msg.text, COLORS.dim);
+            lines.push({ segments: [], empty: true });
          }
-         lines.push({ text: '', empty: true });
-         lines.push({ text: '', empty: true }); // Extra spacing
       } else if (msg.type === 'user') {
-         wrapText(`> ${msg.text}`, maxLineWidth).forEach((l, i) => {
-            lines.push({ text: l, color: THEME.text, bold: i === 0 });
-         });
-         lines.push({ text: '', empty: true });
-         lines.push({ text: '', empty: true }); // Extra spacing
+         addTextWrapped(`> ${msg.text}`, COLORS.white, true);
+         lines.push({ segments: [], empty: true });
       } else {
-         // Tool trace rendering mimicking Claude Code
          if (msg.activityLog && msg.activityLog.length > 0) {
-             msg.activityLog.forEach(entry => {
-                 const isSub = entry.kind === 'status' || entry.kind === 'success' || entry.kind === 'error';
-                 const isTool = entry.kind === 'tool' || entry.kind === 'command';
-                 const icon = isSub ? '  └ ' : '● ';
-                 const color = entry.kind === 'error' ? THEME.error : (isTool ? THEME.success : THEME.text);
-                 
-                 wrapText(`${icon}${entry.text}`, maxLineWidth).forEach((l, i) => {
-                     lines.push({ text: i === 0 ? l : `    ${l}`, color: i === 0 ? color : THEME.dim });
-                 });
+             msg.activityLog.forEach((entry, i) => {
+                 if (i > 0 && (entry.kind === 'tool' || entry.kind === 'command')) {
+                     lines.push({ segments: [], empty: true });
+                 }
+                 renderActivityEntry(entry, lines, maxLineWidth);
              });
-             lines.push({ text: '', empty: true });
+             lines.push({ segments: [], empty: true });
          }
 
          if (msg.planFollowup && msg.planFollowup !== 'none') {
              const planContent = msg.text.replace(/^## Plan: .*\n\n/, '').replace(/\n\n---\n\n[\s\S]*$/, '').trim();
-             lines.push({ text: '✓ PLAN COMPLETE', color: THEME.warning, bold: true });
-             wrapText(planContent, maxLineWidth).forEach(l => lines.push({ text: l, color: THEME.text }));
-             if (msg.planFollowup === 'implement') lines.push({ text: '→ Implementing in this session...', color: THEME.success });
-             else if (msg.planFollowup === 'new_session') lines.push({ text: '✦ Plan saved for next session.', color: THEME.dim });
+             lines.push({ segments: [{ text: '✓ PLAN COMPLETE', color: COLORS.orange, bold: true }] });
+             addTextWrapped(planContent, COLORS.white);
+             if (msg.planFollowup === 'implement') lines.push({ segments: [{ text: '→ Implementing in this session...', color: COLORS.green }] });
+             else if (msg.planFollowup === 'new_session') lines.push({ segments: [{ text: '✦ Plan saved for next session.', color: COLORS.dim }] });
+             lines.push({ segments: [], empty: true });
          } else if (msg.text) {
-             let inCodeBlock = false;
-             wrapText(msg.text, maxLineWidth).forEach(l => {
-                 if (l.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
-                 lines.push({ text: l, color: inCodeBlock ? '#E5C07B' : THEME.text });
-             });
+             // Only render msg.text if it's not already printed perfectly at the end of activityLog
+             let isDuplicate = false;
+             if (msg.activityLog && msg.activityLog.length > 0) {
+                 const lastChat = msg.activityLog.slice().reverse().find(a => a.kind === 'chat');
+                 if (lastChat && lastChat.text === msg.text) isDuplicate = true;
+             }
+             if (!isDuplicate && msg.text !== 'Agent completed.') {
+                 let inCodeBlock = false;
+                 const wrappedLines = [];
+                 
+                 wrapText(msg.text, maxLineWidth - 2).forEach(l => {
+                     if (l.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
+                     let color = inCodeBlock ? COLORS.code : COLORS.white;
+                     wrappedLines.push({ text: l, color });
+                 });
+    
+                 wrappedLines.forEach((wl, i) => {
+                     if (i === 0) {
+                         lines.push({ segments: [
+                             { text: '● ', color: COLORS.white }, 
+                             { text: wl.text, color: wl.color }
+                         ]});
+                     } else {
+                         lines.push({ segments: [
+                             { text: '  ' }, 
+                             { text: wl.text, color: wl.color }
+                         ]});
+                     }
+                 });
+                 lines.push({ segments: [], empty: true });
+             }
          }
-         lines.push({ text: '', empty: true });
-         lines.push({ text: '', empty: true }); // Extra spacing
       }
     });
 
-    // Active streaming logic
     if (isThinking) {
-       // Live Tool Trace
-       activityLog.forEach(entry => {
-           const isSub = entry.kind === 'status' || entry.kind === 'success' || entry.kind === 'error';
-           const isTool = entry.kind === 'tool' || entry.kind === 'command';
-           const icon = isSub ? '  └ ' : '● ';
-           const color = entry.kind === 'error' ? THEME.error : (isTool ? THEME.success : THEME.text);
-           wrapText(`${icon}${entry.text}`, maxLineWidth).forEach((l, i) => {
-               lines.push({ text: i === 0 ? l : `    ${l}`, color: i === 0 ? color : THEME.dim });
-           });
+       activityLog.forEach((entry, i) => {
+           if (i > 0 && (entry.kind === 'tool' || entry.kind === 'command')) {
+               lines.push({ segments: [], empty: true });
+           }
+           renderActivityEntry(entry, lines, maxLineWidth);
        });
 
-       // Live Response Body
        if (streamResponseContent) {
-           lines.push({ text: '', empty: true });
+           lines.push({ segments: [], empty: true });
            let inCodeBlock = false;
-           wrapText(streamResponseContent, maxLineWidth).forEach(l => {
+           const wrappedLines = [];
+           
+           wrapText(streamResponseContent, maxLineWidth - 2).forEach(l => {
                if (l.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
-               lines.push({ text: l, color: inCodeBlock ? '#E5C07B' : THEME.text });
+               wrappedLines.push({ text: l, color: inCodeBlock ? COLORS.code : COLORS.white });
+           });
+           
+           wrappedLines.forEach((wl, i) => {
+               if (i === 0) {
+                   lines.push({ segments: [{ text: '● ', color: COLORS.white }, { text: wl.text, color: wl.color }] });
+               } else {
+                   lines.push({ segments: [{ text: '  ' }, { text: wl.text, color: wl.color }] });
+               }
            });
        }
-
-       // Claude-style active loader
-       lines.push({ text: '', empty: true });
-       const spinner = THINKING_FRAMES[thinkFrame];
-       lines.push({ text: `${spinner} ${streamLabel}...... (esc to interrupt)`, color: THEME.dim });
     }
 
     while (lines.length > 0 && lines[lines.length - 1].empty) {
         lines.pop();
     }
     return lines;
-  }, [messages, isThinking, activityLog, streamResponseContent, streamLabel, maxLineWidth, mode, model, thinkFrame, currentTurn]);
+  }, [messages, isThinking, activityLog, streamResponseContent, maxLineWidth, expandedBlocks]);
 
-  // Dynamically calculate exact heights so the footer never gets pushed off
-  let uiReservedLines = 8; // Header (5) + Input area/Footer (3)
+  let uiReservedLines = 4; 
+  if (isThinking) uiReservedLines += 2;
+  
   if (pendingQuestion) {
       const qStr = typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question;
       let qLinesCount = 0;
       qStr.split('\n').forEach(line => {
-        // columns - 2(margin) - 2(border) - 2(padding)
-        qLinesCount += wrapText(line, dims.columns - 6).length;
+        qLinesCount += wrapText(line, dims.columns - 4).length;
       });
-      uiReservedLines += 6 + qLinesCount;
+      uiReservedLines += 3 + qLinesCount;
   }
-  if (planFollowup) uiReservedLines += 9;
+  if (planFollowup) uiReservedLines += 5;
 
   const chatLinesAvailable = Math.max(5, dims.rows - uiReservedLines);
   const maxScroll = Math.max(0, allLines.length - chatLinesAvailable);
@@ -753,14 +965,14 @@ const ChatScreen = ({ mode, model, onExit }) => {
   if (showQuestions) {
     return (
       <Box flexDirection="column" height={dims.rows} width="100%" alignItems="center" justifyContent="center">
-        <Box borderStyle="round" borderColor={THEME.border} padding={2} flexDirection="column" width={72}>
-          <Text color={THEME.accent} bold marginBottom={1}>Select a Question</Text>
+        <Box borderStyle="round" borderColor={COLORS.dim} padding={2} flexDirection="column" width={72}>
+          <Text color={COLORS.blue} bold marginBottom={1}>Select a Question</Text>
           <Box flexDirection="column" paddingX={2}>
             <SelectInput
               items={questionItems}
               onSelect={handleQuestionSelect}
-              indicatorComponent={({ isSelected }) => <Text color={isSelected ? THEME.accent : THEME.dim}>{isSelected ? '❯ ' : '  '}</Text>}
-              itemComponent={({ isSelected, label }) => <Text color={isSelected ? THEME.accent : THEME.text} bold={isSelected}>{label}</Text>}
+              indicatorComponent={({ isSelected }) => <Text color={isSelected ? COLORS.blue : COLORS.dim}>{isSelected ? '❯ ' : '  '}</Text>}
+              itemComponent={({ isSelected, label }) => <Text color={isSelected ? COLORS.white : COLORS.dim} bold={isSelected}>{label}</Text>}
             />
           </Box>
         </Box>
@@ -771,43 +983,46 @@ const ChatScreen = ({ mode, model, onExit }) => {
   return (
     <Box flexDirection="column" height={dims.rows} width="100%">
       
-      {/* Fixed Header */}
-      <Box flexDirection="row" paddingX={1} paddingBottom={1} marginBottom={1} justifyContent="space-between">
-        <Box flexDirection="row">
-          <Box flexDirection="column" marginRight={2}>
-            <Text color="#FF7979" bold> 🤖 </Text>
-            <Text color="#FF7979" bold>▀▀▀</Text>
-          </Box>
-          <Box flexDirection="column">
-            <Text bold>DevAI Engine</Text>
-            <Text color={THEME.dim}>{mode.label} • {model.name}</Text>
-            <Text color={THEME.dim}>{process.cwd()}</Text>
-          </Box>
+      {scrollOffset > 0 && (
+        <Box flexDirection="row" paddingX={1} paddingBottom={1} justifyContent="flex-end">
+           <Text color={COLORS.dim} bold>↑ Scrolled {clampedScroll} ↑</Text>
         </Box>
-        {scrollOffset > 0 && (
-          <Box flexDirection="column" alignItems="flex-end">
-            <Text color={THEME.accent} bold>↑ Scrolled {clampedScroll} ↑</Text>
-          </Box>
-        )}
-      </Box>
+      )}
 
-      {/* Scrollable Chat Area */}
-      <Box flexGrow={1} flexDirection="column" overflowY="hidden" paddingX={1} paddingTop={0}>
+      {/* Scrollable Log History Area */}
+      <Box flexGrow={1} flexDirection="column" overflowY="hidden" paddingX={0} paddingTop={0}>
         {visibleLines.map((line, index) => (
           <Box key={index} flexDirection="row">
-            <Text color={line.color} bold={line.bold}>{line.text}</Text>
+             {line.segments?.map((seg, sIdx) => (
+               <Text 
+                 key={sIdx} 
+                 color={seg.color} 
+                 backgroundColor={seg.backgroundColor} 
+                 bold={seg.bold}
+               >
+                 {seg.text}
+               </Text>
+             ))}
           </Box>
         ))}
       </Box>
 
-      {/* Claude-style Permission Box overlay */}
+      {/* Live Status Tracker */}
+      {isThinking && (
+        <Box flexDirection="row" paddingX={0} marginBottom={1} marginTop={1}>
+           <Text color={COLORS.orange}>* {streamLabel}... </Text>
+           <Text color={COLORS.dim}>({elapsedTime}s · esc to interrupt)</Text>
+        </Box>
+      )}
+
+      {/* Permission Box overlay */}
       {pendingQuestion && (
-        <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? THEME.error : THEME.accent} paddingX={1} marginX={1} marginBottom={1}>
-          <Text color={pendingQuestion.title?.includes('Warning') ? THEME.error : THEME.accent} bold>{pendingQuestion.title || 'Action Required'}</Text>
-          <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} paddingX={1} marginX={0} marginBottom={1}>
+          <Text color={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} bold>{pendingQuestion.title || 'Action Required'}</Text>
+          <Box flexDirection="column" marginTop={1} marginBottom={0}>
             {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => {
               const isOption = line.trim().startsWith('>');
-              return <Text key={i} color={isOption ? THEME.accent : THEME.text} bold={isOption}>{line}</Text>;
+              return <Text key={i} color={isOption ? COLORS.white : COLORS.dim} bold={isOption}>{line}</Text>;
             })}
           </Box>
         </Box>
@@ -815,7 +1030,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
       {/* Plan Selection Overlay */}
       {planFollowup && !isThinking && (
-        <Box flexDirection="column" marginX={1} marginBottom={1}>
+        <Box flexDirection="column" marginX={0} marginBottom={1}>
           <PlanFollowupSelect
             planFile={planFollowup.planFile}
             onSelect={(action) => {
@@ -829,30 +1044,32 @@ const ChatScreen = ({ mode, model, onExit }) => {
         </Box>
       )}
 
-      {/* Input Area */}
-      <Box flexDirection="row" paddingX={1} marginBottom={1}>
-        <Box marginRight={1}>
-          <Text color={THEME.text} bold>{'>'}</Text>
-        </Box>
-        <Box flexGrow={1}>
-          <TextInput
-            value={input}
-            onChange={(val) => {
-              if (!isThinking || pendingQuestion) setInput(val);
-            }}
-            onSubmit={handleSubmit}
-            placeholder={pendingQuestion ? (pendingQuestion.options?.length > 0 ? 'Type a number or your answer...' : 'Type your answer...') : ''}
-            focus={!isThinking || pendingQuestion}
-            showCursor
-          />
+      {/* Main Input Box (Rounded like the reference) */}
+      <Box flexDirection="column" paddingX={0}>
+        <Box borderStyle="round" borderColor={COLORS.dim} paddingX={1} flexDirection="row">
+          <Box marginRight={1}>
+            <Text color={COLORS.white} bold>{'>'}</Text>
+          </Box>
+          <Box flexGrow={1}>
+            <TextInput
+              value={input}
+              onChange={(val) => {
+                if (!isThinking || pendingQuestion) setInput(val);
+              }}
+              onSubmit={handleSubmit}
+              placeholder={pendingQuestion ? (pendingQuestion.options?.length > 0 ? 'Type a number or your answer...' : 'Type your answer...') : ''}
+              focus={!isThinking || pendingQuestion}
+              showCursor
+            />
+          </Box>
         </Box>
       </Box>
 
-      {/* Footer minimal info strip */}
+      {/* Footer Minimal Strips */}
       <Box flexDirection="row" justifyContent="space-between" paddingX={1}>
-        <Text color={THEME.dim}>? for shortcuts</Text>
-        <Text color={THEME.dim}>{isThinking ? 'Thinking on (tab to toggle)' : 'Thinking off (tab to toggle)'}</Text>
+        <Text color={COLORS.dim}>? for shortcuts</Text>
       </Box>
+
     </Box>
   );
 };

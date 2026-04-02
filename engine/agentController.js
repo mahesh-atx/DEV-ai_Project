@@ -360,9 +360,8 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
 
     agentMessages.push(response);
 
-    if (response.content && !response.tool_calls) {
-      const preview = `${response.content.slice(0, 150)}${response.content.length > 150 ? '...' : ''}`;
-      emitReporter(reporter, "log", { level: "info", message: preview });
+    if (response.content) {
+      emitReporter(reporter, "log", { level: "chat", message: response.content });
     }
 
     if (response.tool_calls && response.tool_calls.length > 0) {

@@ -6,8 +6,8 @@ import { THEME, LOGO } from '../constants.js';
 const MainMenu = ({ mode, model, onSelect }) => {
   const items = [
     { label: 'Start Session', value: 'chat' },
-    { label: `Change Mode  ⸺ Current: ${mode.label}`, value: 'modes' },
-    { label: `Change Model ⸺ Current: ${model.label}`, value: 'models' },
+    { label: `Change Mode  [ Current: ${mode.label} ]`, value: 'modes' },
+    { label: `Change Model [ Current: ${model.label} ]`, value: 'models' },
     { label: 'Settings', value: 'settings' },
     { label: 'Exit CLI', value: 'exit' },
   ];

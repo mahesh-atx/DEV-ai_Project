@@ -68,7 +68,8 @@ const SettingsScreen = ({ onBack }) => {
 
   if (screen === 'change') {
     return (
-      <Box padding={2} borderStyle="round" borderColor={THEME.border} flexDirection="column" width={72}>
+      <Box flexDirection="column" padding={2} width="100%" alignItems="center">
+        <Box padding={2} borderStyle="round" borderColor={THEME.border} flexDirection="column" width={72}>
         <Text color={THEME.accent} bold>Change API Key</Text>
         <Box marginTop={1} flexDirection="column">
           <Text color={THEME.dim}>Current: {maskKey(currentKey || envKey)}</Text>
@@ -95,12 +96,14 @@ const SettingsScreen = ({ onBack }) => {
           <Text color={THEME.dim}>Press Enter to save, or Esc to cancel.</Text>
         </Box>
         <EscHandler onEsc={() => setScreen('menu')} />
+        </Box>
       </Box>
     );
   }
 
   return (
-    <Box padding={2} borderStyle="round" borderColor={THEME.border} flexDirection="column" width={72}>
+    <Box flexDirection="column" padding={2} width="100%" alignItems="center">
+      <Box padding={2} borderStyle="round" borderColor={THEME.border} flexDirection="column" width={72}>
       <Text color={THEME.accent} bold>Global Settings</Text>
       <Box marginTop={1} marginBottom={1} flexDirection="column">
         <Text color={THEME.text}>API Key: {maskKey(currentKey || envKey)}</Text>
@@ -126,6 +129,7 @@ const SettingsScreen = ({ onBack }) => {
           </Text>
         )}
       />
+      </Box>
     </Box>
   );
 };
