@@ -186,6 +186,7 @@ export function searchWorkspaceContent(projectDir, query, options = {}) {
   const includeHidden = options.includeHidden === true;
   const maxDepth = Number.isInteger(options.depth) ? Math.max(0, options.depth) : 8;
   const startPath = resolveWorkspacePath(projectDir, options.path || ".");
+  const includePattern = options.include ? String(options.include) : null;
   const parsed = parseContentQuery(query);
   const results = [];
 
@@ -225,6 +226,9 @@ export function searchWorkspaceContent(projectDir, query, options = {}) {
 
       if (stat.size > MAX_FILE_BYTES) continue;
 
+      const relative = path.relative(projectDir, fullPath).replace(/\\/g, "/");
+      if (includePattern && !matchesPathPattern(relative, includePattern)) continue;
+
       let content;
       try {
         content = fs.readFileSync(fullPath, "utf8");
@@ -233,7 +237,6 @@ export function searchWorkspaceContent(projectDir, query, options = {}) {
       }
 
       const lines = content.split(/\r?\n/);
-      const relative = path.relative(projectDir, fullPath).replace(/\\/g, "/");
 
       for (let index = 0; index < lines.length; index++) {
         if (!lineMatches(lines[index])) continue;

@@ -55,6 +55,221 @@ function truncate(text, max = 96) {
   return `${clean.slice(0, Math.max(0, max - 3))}...`;
 }
 
+function parseToolArguments(rawArgs) {
+  if (!rawArgs) return {};
+  if (typeof rawArgs === 'object') return rawArgs;
+  if (typeof rawArgs !== 'string') return {};
+
+  try {
+    return JSON.parse(rawArgs);
+  } catch {
+    return {};
+  }
+}
+
+function firstNonEmptyValue(values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function buildToolNarration(toolCall) {
+  const toolName = toolCall?.function?.name || 'tool';
+  const args = parseToolArguments(toolCall?.function?.arguments);
+
+  switch (toolName) {
+    case 'read':
+    case 'read_file': {
+      const path = firstNonEmptyValue([args.path, args.filePath]);
+      return path
+        ? `I'm opening ${path} to inspect the exact code before I decide what to do next.`
+        : "I'm opening the relevant file so I can inspect the exact code before making changes.";
+    }
+    case 'list':
+    case 'list_files': {
+      const path = firstNonEmptyValue([args.path, '.']);
+      return `I'm listing ${path} to understand the workspace structure before I go deeper.`;
+    }
+    case 'glob':
+    case 'search_files': {
+      const pattern = firstNonEmptyValue([args.pattern]);
+      return pattern
+        ? `I'm searching for files matching ${pattern} so I can find the right place to inspect.`
+        : "I'm searching the workspace to find the right files to inspect.";
+    }
+    case 'grep':
+    case 'search_content': {
+      const query = firstNonEmptyValue([args.query, args.pattern]);
+      return query
+        ? `I'm searching the codebase for ${query} so I can trace where this behavior is coming from.`
+        : "I'm searching through the codebase to trace where this behavior is coming from.";
+    }
+    case 'bash':
+    case 'run_command': {
+      const command = firstNonEmptyValue([args.command]);
+      return command
+        ? `I'm running ${command} to verify the current state directly from the workspace.`
+        : "I'm running a command to verify the current state directly from the workspace.";
+    }
+    case 'write':
+    case 'write_file': {
+      const path = firstNonEmptyValue([args.path, args.filePath]);
+      return path
+        ? `I'm writing ${path} now that I know what needs to change.`
+        : "I'm writing the required file changes now that I know what needs to change.";
+    }
+    case 'edit':
+    case 'edit_file':
+    case 'multiedit':
+    case 'apply_patch': {
+      const path = firstNonEmptyValue([args.path, args.filePath]);
+      return path
+        ? `I've identified the fix, and I'm updating ${path} now.`
+        : "I've identified the fix, and I'm applying the code changes now.";
+    }
+    case 'websearch': {
+      const query = firstNonEmptyValue([args.query]);
+      return query
+        ? `I'm searching the web for ${query} so I can verify it with current information.`
+        : "I'm searching the web so I can verify this with current information.";
+    }
+    case 'webfetch': {
+      const url = firstNonEmptyValue([args.url]);
+      return url
+        ? `I'm fetching ${url} so I can inspect the source directly.`
+        : "I'm fetching the referenced page so I can inspect the source directly.";
+    }
+    case 'question':
+    case 'ask_user':
+      return "I need one clarification before I continue so I don't make the wrong change.";
+    case 'delegate_task':
+    case 'task':
+      return "I'm delegating a focused subtask to gather the missing context more efficiently.";
+    case 'batch':
+      return "I'm running a small batch of tool calls to gather the needed context faster.";
+    case 'finish_task':
+      return "I've finished the work and I'm wrapping up with a final summary.";
+    case 'plan_exit':
+      return "I've completed the plan and I'm wrapping it up for you.";
+    case 'lsp':
+      return "I'm using lightweight code intelligence to inspect symbols and references in the workspace.";
+    default:
+      return `I'm using ${toolName} to move this forward with concrete information.`;
+  }
+}
+
+function buildToolNarrationSummary(toolCalls) {
+  const validCalls = (toolCalls || []).filter((toolCall) => toolCall?.function?.name);
+  if (validCalls.length === 0) return '';
+  if (validCalls.length === 1) return buildToolNarration(validCalls[0]);
+
+  const firstTwo = validCalls.slice(0, 2).map(buildToolNarration);
+  const combined = firstTwo.join(' ');
+  if (validCalls.length === 2) return combined;
+
+  return `${combined} I may use a couple more tools after that to finish tracing the flow cleanly.`;
+}
+
+function getToolDisplayName(toolName) {
+  if (toolName === 'bash') return 'Bash';
+  if (toolName === 'read') return 'Read';
+  if (toolName === 'write') return 'Write';
+  if (toolName === 'edit') return 'Update';
+  if (toolName === 'list') return 'List';
+  if (toolName === 'glob') return 'Glob';
+  if (toolName === 'grep') return 'Grep';
+  if (toolName === 'question') return 'Ask';
+  if (toolName === 'lsp') return 'Lsp';
+  if (toolName === 'run_command') return 'Bash';
+  if (toolName === 'read_file') return 'Read';
+  if (toolName === 'write_file') return 'Write';
+  if (toolName === 'edit_file' || toolName === 'multiedit' || toolName === 'apply_patch') return 'Update';
+  if (toolName === 'list_files') return 'List';
+  if (toolName === 'search_files') return 'Search';
+  if (toolName === 'search_content') return 'Grep';
+  if (toolName === 'ask_user') return 'Ask';
+  if (toolName === 'finish_task') return 'Task';
+  if (toolName === 'plan_exit') return 'Plan';
+  return 'Task';
+}
+
+function formatToolArgs(toolName, rawArgs, argsObject) {
+  const parsed = (argsObject && typeof argsObject === 'object') ? argsObject : parseToolArguments(rawArgs);
+  const pick = (...values) => firstNonEmptyValue(values);
+
+  switch (toolName) {
+    case 'bash':
+    case 'run_command':
+      return pick(parsed.command, rawArgs);
+    case 'read':
+    case 'read_file':
+    case 'write':
+    case 'write_file':
+    case 'edit':
+    case 'edit_file':
+    case 'multiedit':
+      return pick(parsed.path, parsed.filePath, rawArgs);
+    case 'apply_patch':
+      return pick(parsed.path, parsed.target, 'patch');
+    case 'list':
+    case 'list_files':
+      return pick(parsed.path, '.');
+    case 'glob':
+    case 'search_files':
+      return pick(parsed.pattern, rawArgs);
+    case 'grep':
+    case 'search_content':
+      return pick(parsed.query, parsed.pattern, rawArgs);
+    case 'websearch':
+      return pick(parsed.query, rawArgs);
+    case 'webfetch':
+      return pick(parsed.url, rawArgs);
+    case 'question':
+    case 'ask_user':
+      return pick(parsed.question, parsed.questions?.[0]?.question, rawArgs);
+    case 'finish_task':
+      return pick(parsed.message, 'done');
+    case 'lsp':
+      return pick(parsed.operation, 'lsp');
+    default:
+      return typeof rawArgs === 'string' ? rawArgs : '';
+  }
+}
+
+function ensureSpacer(linesArray) {
+  if (linesArray.length === 0) return;
+  if (linesArray[linesArray.length - 1]?.empty) return;
+  linesArray.push({ segments: [], empty: true });
+}
+
+function isTopLevelActivity(entry) {
+  return entry?.kind === 'tool' || entry?.kind === 'command' || entry?.kind === 'chat';
+}
+
+function findLatestCollapsibleId(currentActivity, messageList) {
+  for (let i = currentActivity.length - 1; i >= 0; i--) {
+    if (currentActivity[i]?.metadata?.isCollapsible) {
+      return currentActivity[i].id;
+    }
+  }
+
+  for (let i = messageList.length - 1; i >= 0; i--) {
+    const msg = messageList[i];
+    if (!msg?.activityLog) continue;
+
+    for (let j = msg.activityLog.length - 1; j >= 0; j--) {
+      if (msg.activityLog[j]?.metadata?.isCollapsible) {
+        return msg.activityLog[j].id;
+      }
+    }
+  }
+
+  return null;
+}
+
 const getCharWidth = (str) => {
   if (typeof stringWidth === 'function') return stringWidth(str);
   if (stringWidth && typeof stringWidth.default === 'function') return stringWidth.default(str);
@@ -186,6 +401,19 @@ const ChatScreen = ({ mode, model, onExit }) => {
     return () => clearInterval(timer);
   }, [isThinking]);
 
+  const toggleLatestCollapsible = useCallback(() => {
+    const targetId = findLatestCollapsibleId(currentActivityRef.current, messages);
+    if (!targetId) return false;
+
+    setExpandedBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(targetId)) next.delete(targetId);
+      else next.add(targetId);
+      return next;
+    });
+    return true;
+  }, [messages]);
+
   useInput((inputChars, key) => {
     if (pendingQuestion) return;
 
@@ -202,38 +430,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
         return;
       }
       
-      if (key.ctrl && inputChars === 'r') {
-        let targetId = null;
-        
-        for (let i = currentActivityRef.current.length - 1; i >= 0; i--) {
-            if (currentActivityRef.current[i].metadata?.isCollapsible) {
-                targetId = currentActivityRef.current[i].id;
-                break;
-            }
-        }
-        
-        if (!targetId) {
-            for (let i = messages.length - 1; i >= 0 && !targetId; i--) {
-                const msg = messages[i];
-                if (msg.activityLog) {
-                    for (let j = msg.activityLog.length - 1; j >= 0; j--) {
-                        if (msg.activityLog[j].metadata?.isCollapsible) {
-                            targetId = msg.activityLog[j].id;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (targetId) {
-            setExpandedBlocks(prev => {
-                const next = new Set(prev);
-                if (next.has(targetId)) next.delete(targetId);
-                else next.add(targetId);
-                return next;
-            });
-        }
+      if ((key.ctrl && inputChars === 'r') || (key.meta && inputChars === 'r') || (key.escape && inputChars === 'r')) {
+        toggleLatestCollapsible();
         return;
       }
 
@@ -326,24 +524,9 @@ const ChatScreen = ({ mode, model, onExit }) => {
       if (text) setStreamLabel(text);
       if (status === 'error') pushActivity('error', text || 'Phase failed');
     },
-    toolExecution: ({ toolName, args }) => {
-      let displayTool = 'Task';
-      if (toolName === 'run_command') displayTool = 'Bash';
-      else if (toolName === 'read_file') displayTool = 'Read';
-      else if (toolName === 'write_file') displayTool = 'Write';
-      else if (toolName === 'search_files') displayTool = 'Search';
-      else if (toolName === 'ask_user') displayTool = 'Ask';
-
-      let cleanArgs = args || '';
-      if (typeof cleanArgs === 'string' && cleanArgs.startsWith('{')) {
-        try {
-          const p = JSON.parse(cleanArgs);
-          if (toolName === 'run_command' && p.command) cleanArgs = p.command;
-          else if (toolName === 'write_file' && p.path) cleanArgs = p.path;
-          else if (toolName === 'read_file' && p.path) cleanArgs = p.path;
-          else cleanArgs = Object.values(p)[0] || '';
-        } catch(e){}
-      }
+    toolExecution: ({ toolName, args, argsObject }) => {
+      const displayTool = getToolDisplayName(toolName);
+      const cleanArgs = formatToolArgs(toolName, args, argsObject);
       pushActivity('tool', `${displayTool}(${truncate(cleanArgs, 50)})`);
     },
     toolResult: ({ toolName, text, fullText, isCollapsible }) => {
@@ -437,10 +620,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
     const [
       { default: runAgentPipeline }, { buildSmartContext }, { patchFile }, { runCommands },
       { gitCheckpoint, gitRestore, gitDiscard }, { listWorkspaceEntries, searchWorkspaceFiles, searchWorkspaceContent },
-      path, fs, { parseJSON }, policyModule
+      { runWorkspaceLsp }, path, fs, { parseJSON }, policyModule
     ] = await Promise.all([
       import('../../engine/agentController.js'), import('../../engine/context.js'), import('../../engine/patchEngine.js'), import('../../engine/commandExecutor.js'),
-      import('../../utils/git.js'), import('../../utils/fileTools.js'), import('path'), import('fs'), import('../../engine/jsonParser.js'),
+      import('../../utils/git.js'), import('../../utils/fileTools.js'), import('../../utils/lspTools.js'), import('path'), import('fs'), import('../../engine/jsonParser.js'),
       import('../../config/commandPolicy.js')
         .catch(() => import('../../engine/commandPolicy.js'))
         .catch(() => ({ loadProjectCommandPolicy: () => ({ blockedExecutables: [] }) }))
@@ -483,9 +666,12 @@ const ChatScreen = ({ mode, model, onExit }) => {
           }
         }
         
-        // INTERLEAVING FIX: Push finished conversational text immediately into the trace
-        if (replyContent.trim()) {
-            reporter.log({ level: 'chat', message: replyContent.trim() });
+        const finalReply = replyContent.trim();
+        if (!finalReply && toolCalls.length > 0) {
+            const fallbackNarration = buildToolNarrationSummary(toolCalls.filter(Boolean));
+            if (fallbackNarration) {
+                reporter.log({ level: 'chat', message: fallbackNarration });
+            }
         }
         setStreamResponseContent('');
 
@@ -538,7 +724,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
             cwd: execCwd,
             shell: true,
             windowsHide: true,
-            timeout: policy.commandTimeoutMs || 300000,
+            timeout: commandOptions.timeout || policy.commandTimeoutMs || 300000,
           });
 
           child.stdout.on('data', (data) => {
@@ -575,8 +761,9 @@ const ChatScreen = ({ mode, model, onExit }) => {
         });
       },
       listFiles: async (subpath = '.', depth = 2, includeHidden = false) => listWorkspaceEntries(projectDir, subpath, { depth, includeHidden }),
-      searchFiles: async (pattern) => searchWorkspaceFiles(projectDir, pattern),
-      searchContent: async (searchText) => searchWorkspaceContent(projectDir, searchText),
+      searchFiles: async (pattern, searchOptions = {}) => searchWorkspaceFiles(projectDir, pattern, searchOptions),
+      searchContent: async (searchText, searchOptions = {}) => searchWorkspaceContent(projectDir, searchText, searchOptions),
+      lsp: async (lspOptions) => runWorkspaceLsp(projectDir, lspOptions),
       buildFreshContext: (freshQuery) => buildSmartContext(projectDir, freshQuery, model, msgHistory),
     };
 
@@ -716,6 +903,12 @@ const ChatScreen = ({ mode, model, onExit }) => {
       return;
     }
 
+    if (trimmed.toLowerCase() === '/expand' || trimmed.toLowerCase() === '/collapse' || trimmed.toLowerCase() === '/toggle') {
+      toggleLatestCollapsible();
+      setInput('');
+      return;
+    }
+
     let activeMode = mode;
     let query = trimmed;
     if (trimmed.startsWith('/plan')) { activeMode = MODE_MAP.planner; query = trimmed.slice(5).trim() || 'Create a plan.'; }
@@ -727,7 +920,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [executeHandler, mode, nextId, onExit, pendingQuestion, pushActivity]);
+  }, [executeHandler, mode, nextId, onExit, pendingQuestion, pushActivity, toggleLatestCollapsible]);
 
   const handleQuestionSelect = useCallback((item) => {
     setShowQuestions(false);
@@ -755,7 +948,6 @@ const ChatScreen = ({ mode, model, onExit }) => {
                   linesArray.push({ segments: [{ text: '  ' }, { text: l, color }] });
               }
           });
-          linesArray.push({ segments: [], empty: true });
           return;
       }
 
@@ -768,7 +960,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
       let hintText = null;
 
       if (entry.metadata?.isCollapsible && !isExpanded) {
-          hintText = { text: ' (ctrl+r to expand)', color: COLORS.dim };
+          hintText = { text: ' (ctrl+r / alt+r / /expand)', color: COLORS.dim };
       }
 
       wrapText(`${icon}${mainText}`, maxW).forEach((l, i) => {
@@ -836,6 +1028,31 @@ const ChatScreen = ({ mode, model, onExit }) => {
       }
   };
 
+  const renderActivityClusters = (entries, linesArray, maxW) => {
+      if (!entries || entries.length === 0) return;
+
+      const clusters = [];
+      let currentCluster = [];
+
+      entries.forEach((entry) => {
+          if (isTopLevelActivity(entry)) {
+              if (currentCluster.length > 0) clusters.push(currentCluster);
+              currentCluster = [entry];
+          } else if (currentCluster.length > 0) {
+              currentCluster.push(entry);
+          } else {
+              currentCluster = [entry];
+          }
+      });
+
+      if (currentCluster.length > 0) clusters.push(currentCluster);
+
+      clusters.forEach((cluster, index) => {
+          if (index > 0) ensureSpacer(linesArray);
+          cluster.forEach((entry) => renderActivityEntry(entry, linesArray, maxW));
+      });
+  };
+
   const maxLineWidth = Math.max(20, dims.columns - 4);
   const allLines = useMemo(() => {
     let lines = [];
@@ -857,13 +1074,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
          lines.push({ segments: [], empty: true });
       } else {
          if (msg.activityLog && msg.activityLog.length > 0) {
-             msg.activityLog.forEach((entry, i) => {
-                 if (i > 0 && (entry.kind === 'tool' || entry.kind === 'command')) {
-                     lines.push({ segments: [], empty: true });
-                 }
-                 renderActivityEntry(entry, lines, maxLineWidth);
-             });
-             lines.push({ segments: [], empty: true });
+             renderActivityClusters(msg.activityLog, lines, maxLineWidth);
+             ensureSpacer(lines);
          }
 
          if (msg.planFollowup && msg.planFollowup !== 'none') {
@@ -910,12 +1122,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     });
 
     if (isThinking) {
-       activityLog.forEach((entry, i) => {
-           if (i > 0 && (entry.kind === 'tool' || entry.kind === 'command')) {
-               lines.push({ segments: [], empty: true });
-           }
-           renderActivityEntry(entry, lines, maxLineWidth);
-       });
+       renderActivityClusters(activityLog, lines, maxLineWidth);
 
        if (streamResponseContent) {
            lines.push({ segments: [], empty: true });
@@ -964,7 +1171,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
   if (showQuestions) {
     return (
-      <Box flexDirection="column" height={dims.rows} width="100%" alignItems="center" justifyContent="center">
+      <Box flexDirection="column" height={dims.rows} width="100%" alignItems="center" justifyContent="center" paddingX={1}>
         <Box borderStyle="round" borderColor={COLORS.dim} padding={2} flexDirection="column" width={72}>
           <Text color={COLORS.blue} bold marginBottom={1}>Select a Question</Text>
           <Box flexDirection="column" paddingX={2}>
@@ -981,7 +1188,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   }
 
   return (
-    <Box flexDirection="column" height={dims.rows} width="100%">
+    <Box flexDirection="column" height={dims.rows} width="100%" paddingX={1}>
       
       {scrollOffset > 0 && (
         <Box flexDirection="row" paddingX={1} paddingBottom={1} justifyContent="flex-end">
@@ -990,12 +1197,15 @@ const ChatScreen = ({ mode, model, onExit }) => {
       )}
 
       {/* Scrollable Log History Area */}
-      <Box flexGrow={1} flexDirection="column" overflowY="hidden" paddingX={0} paddingTop={0}>
+      <Box flexGrow={1} flexDirection="column" overflowY="hidden" paddingX={1} paddingTop={0}>
         {visibleLines.map((line, index) => (
           <Box key={index} flexDirection="row">
+             {line.empty ? (
+               <Text> </Text>
+             ) : null}
              {line.segments?.map((seg, sIdx) => (
-               <Text 
-                 key={sIdx} 
+                <Text 
+                  key={sIdx} 
                  color={seg.color} 
                  backgroundColor={seg.backgroundColor} 
                  bold={seg.bold}
@@ -1009,7 +1219,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
       {/* Live Status Tracker */}
       {isThinking && (
-        <Box flexDirection="row" paddingX={0} marginBottom={1} marginTop={1}>
+        <Box flexDirection="row" paddingX={1} marginBottom={1} marginTop={1}>
            <Text color={COLORS.orange}>* {streamLabel}... </Text>
            <Text color={COLORS.dim}>({elapsedTime}s · esc to interrupt)</Text>
         </Box>
@@ -1017,7 +1227,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
       {/* Permission Box overlay */}
       {pendingQuestion && (
-        <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} paddingX={1} marginX={0} marginBottom={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} paddingX={1} marginX={1} marginBottom={1}>
           <Text color={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} bold>{pendingQuestion.title || 'Action Required'}</Text>
           <Box flexDirection="column" marginTop={1} marginBottom={0}>
             {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, i) => {
@@ -1030,7 +1240,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
       {/* Plan Selection Overlay */}
       {planFollowup && !isThinking && (
-        <Box flexDirection="column" marginX={0} marginBottom={1}>
+        <Box flexDirection="column" marginX={1} marginBottom={1}>
           <PlanFollowupSelect
             planFile={planFollowup.planFile}
             onSelect={(action) => {
@@ -1045,7 +1255,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
       )}
 
       {/* Main Input Box (Rounded like the reference) */}
-      <Box flexDirection="column" paddingX={0}>
+      <Box flexDirection="column" paddingX={1}>
         <Box borderStyle="round" borderColor={COLORS.dim} paddingX={1} flexDirection="row">
           <Box marginRight={1}>
             <Text color={COLORS.white} bold>{'>'}</Text>
