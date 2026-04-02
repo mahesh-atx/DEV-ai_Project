@@ -44,7 +44,7 @@ const SetupScreen = ({ onComplete }) => {
             No NVIDIA API Key Found
           </Text>
           <Text color={THEME.text} marginBottom={1}>
-            DevAI requires an NVIDIA API key to function.
+            RootX requires an NVIDIA API key to function.
           </Text>
           <Text color={THEME.dim} marginBottom={1}>
             Get your free key at: https://build.nvidia.com
@@ -74,7 +74,7 @@ const SetupScreen = ({ onComplete }) => {
 
           <Box marginTop={2}>
             <Text color={THEME.dim}>
-              Press Enter to save. The key is stored locally at ~/.config/devai/
+              Press Enter to save. The key is stored locally at ~/.config/rootx/
             </Text>
           </Box>
         </Box>

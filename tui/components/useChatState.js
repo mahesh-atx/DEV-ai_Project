@@ -45,7 +45,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
   });
 
   const [messages, setMessages] = useState([
-    { type: 'system', text: `DevAI Workspace initialized.`, id: 'init' },
+    { type: 'system', text: `RootX Workspace initialized.`, id: 'init' },
   ]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -829,7 +829,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
             title: isBlocked ? 'Bash (Policy Warning)' : 'Bash',
             question: isBlocked
                 ? `⚠️ WARNING: '${cmdBase}' is in your blockedExecutables policy!\n\nCommand: ${command}\n\nDo you want to allow it anyway?`
-                : `Command: ${command}\n\nDevAI wants to execute this command.`,
+                : `Command: ${command}\n\nRootX wants to execute this command.`,
             options: ['Run', 'Skip', 'Fix']
         });
 
@@ -842,7 +842,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
         if (normalizedAnswer === 'fix' || answer === '3') {
             const fixFeedback = await reporter.askUser({
                 title: 'Bash - Fix',
-                question: `How should DevAI fix or change this command?`,
+                question: `How should RootX fix or change this command?`,
                 options: []
             });
             pushActivity('error', `Blocked: ${truncate(command, 60)}`);

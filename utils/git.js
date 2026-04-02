@@ -92,7 +92,7 @@ export function gitCheckpoint(repoDir = process.cwd()) {
 
   try {
     const changedPaths = listChangedPaths(repoDir);
-    const snapshotDir = fs.mkdtempSync(path.join(os.tmpdir(), "devai-checkpoint-"));
+    const snapshotDir = fs.mkdtempSync(path.join(os.tmpdir(), "rootx-checkpoint-"));
     const entries = changedPaths.map(({ path: relativePath }) =>
       copyIntoSnapshot(repoDir, snapshotDir, relativePath)
     );

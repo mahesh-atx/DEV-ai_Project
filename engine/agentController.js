@@ -1,6 +1,6 @@
 /**
  * Agent Controller — Interactive Tool Calling Pipeline
- * DevAI operates in a dynamic loop, acting and validating via tools.
+ * RootX operates in a dynamic loop, acting and validating via tools.
  */
 
 import { runPolishAgent } from "./polishAgent.js";
@@ -171,7 +171,7 @@ ${OS_INFO}
 `;
 
 export const PROMPTS = {
-  general: `You are DevAI — an Elite Autonomous AI Software Engineer.\nYour ultimate goal is to complete the user's request by intelligently calling tools.\n${BASE_RULES}`,
+  general: `You are RootX — an Elite Autonomous AI Software Engineer.\nYour ultimate goal is to complete the user's request by intelligently calling tools.\n${BASE_RULES}`,
   explorer: `You are an Expert Codebase Explorer.\nYour goal is to aggressively search the codebase, read files, and output a detailed context architecture report. You cannot edit code.\n${BASE_RULES}`,
   coder: `You are an Elite Implementation Coder.\nYour goal is to execute specific file creations and edits cleanly based on the orchestrator's plan. You should not test code.\n${BASE_RULES}`,
   debugger: `You are a strict QA and Verification Debugger.\nYour goal is to run terminal tests, compile the codebase, analyze errors, and verify the work. You do not edit code.\n${BASE_RULES}`,

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const CONFIG_DIR_NAME = '.config/devai';
+const CONFIG_DIR_NAME = '.config/rootx';
 const CONFIG_FILE_NAME = 'config.json';
 
 /**

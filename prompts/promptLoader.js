@@ -22,7 +22,7 @@ export function loadPrompt(role, modelConfig = {}, extraContext = {}) {
   try {
     rolePrompt = fs.readFileSync(rolePath, 'utf8');
   } catch(e) {
-    rolePrompt = `You are DevAI — an Elite Autonomous AI Software Engineer.\nYour ultimate goal is to complete the user's request using tools.`;
+    rolePrompt = `You are RootX — an Elite Autonomous AI Software Engineer.\nYour ultimate goal is to complete the user's request using tools.`;
   }
 
   const osInfo = `Operating System: ${os.platform()} (${os.release()}).\nIf on Windows, use 'dir' instead of 'ls', and 'python' or 'py' instead of 'python3'.`;

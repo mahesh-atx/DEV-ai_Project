@@ -108,7 +108,7 @@ const SettingsScreen = ({ onBack }) => {
       <Box marginTop={1} marginBottom={1} flexDirection="column">
         <Text color={THEME.text}>API Key: {maskKey(currentKey || envKey)}</Text>
         <Text color={THEME.dim}>Source: {keySource}</Text>
-        <Text color={THEME.dim}>Config: ~/.config/devai/config.json</Text>
+        <Text color={THEME.dim}>Config: ~/.config/rootx/config.json</Text>
       </Box>
       {message ? (
         <Box marginBottom={1}>

@@ -1,17 +1,22 @@
 [
   {
-    "content": "Setup test environment",
-    "status": "pending",
+    "content": "Read current App.jsx to understand existing features",
+    "status": "completed",
     "priority": "high"
   },
   {
-    "content": "Run tool tests",
-    "status": "pending",
+    "content": "Add all new features (edit, priority, due date, category, filter, search)",
+    "status": "completed",
     "priority": "high"
   },
   {
-    "content": "Clean up test files",
-    "status": "pending",
-    "priority": "medium"
+    "content": "Update CSS for new features",
+    "status": "completed",
+    "priority": "high"
+  },
+  {
+    "content": "Test the application",
+    "status": "completed",
+    "priority": "high"
   }
 ]
