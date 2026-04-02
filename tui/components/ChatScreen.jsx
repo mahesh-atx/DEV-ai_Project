@@ -372,6 +372,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [streamResponseContent, setStreamResponseContent] = useState('');
   const [activityLog, setActivityLog] = useState([]);
   const [liveTick, setLiveTick] = useState(0);
+  const [liveStatus, setLiveStatus] = useState(null);
 
   const [pendingQuestion, setPendingQuestion] = useState(null);
   const questionResolverRef = useRef(null);
@@ -385,6 +386,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const currentSummaryRef = useRef(DEFAULT_SUMMARY);
   const abortControllerRef = useRef(null);
   const lastCheckpointRef = useRef(null);
+  const liveStatusTimeoutRef = useRef(null);
 
   if (!clientRef.current) {
     try {
@@ -427,6 +429,12 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
     return () => clearInterval(timer);
   }, [isThinking]);
+
+  useEffect(() => () => {
+    if (liveStatusTimeoutRef.current) {
+      clearTimeout(liveStatusTimeoutRef.current);
+    }
+  }, []);
 
   const toggleLatestCollapsible = useCallback(() => {
     const targetId = findLatestCollapsibleId(currentActivityRef.current, messages);
@@ -529,6 +537,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
   }, []);
 
   const resetRunState = useCallback((label) => {
+    if (liveStatusTimeoutRef.current) {
+      clearTimeout(liveStatusTimeoutRef.current);
+      liveStatusTimeoutRef.current = null;
+    }
     currentActivityRef.current = [];
     currentSummaryRef.current = DEFAULT_SUMMARY;
     setStreamLabel(label);
@@ -536,11 +548,23 @@ const ChatScreen = ({ mode, model, onExit }) => {
     setActivityLog([]);
     setScrollOffset(0);
     setCurrentTurn(1);
+    setLiveStatus({ kind: 'thinking', label });
   }, []);
 
-  const finishRun = useCallback(() => {
+  const finishRun = useCallback((status = 'success', label = null) => {
     setIsThinking(false);
     abortControllerRef.current = null;
+    const nextLabel = label || (status === 'error' ? 'Run failed' : 'Run complete');
+    setLiveStatus({ kind: status, label: nextLabel });
+
+    if (liveStatusTimeoutRef.current) {
+      clearTimeout(liveStatusTimeoutRef.current);
+    }
+
+    liveStatusTimeoutRef.current = setTimeout(() => {
+      setLiveStatus(null);
+      liveStatusTimeoutRef.current = null;
+    }, status === 'error' ? 1600 : 1200);
   }, []);
 
   const appendMessage = useCallback((type, text, extra = {}) => {
@@ -609,6 +633,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
       return;
     }
 
+    let finalStatus = 'success';
+    let finalLabel = 'Git push complete';
     setIsThinking(true);
     resetRunState('Git running');
     setScrollOffset(0);
@@ -618,12 +644,16 @@ const ChatScreen = ({ mode, model, onExit }) => {
       const pendingChanges = `${statusResult.stdout || ''}${statusResult.stderr || ''}`.trim();
 
       if (!pendingChanges) {
+        finalStatus = 'error';
+        finalLabel = 'Nothing to commit';
         appendMessage('system', 'There are no local changes to commit.');
         return;
       }
 
       const addResult = await runDirectProcess('git', ['add', '-A']);
       if (!addResult.ok) {
+        finalStatus = 'error';
+        finalLabel = 'Git add failed';
         appendMessage('system', 'Git add failed. Review the transcript above for the exact error.');
         return;
       }
@@ -631,6 +661,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
       const commitResult = await runDirectProcess('git', ['commit', '-m', message]);
       const commitOutput = `${commitResult.stdout || ''}\n${commitResult.stderr || ''}`.trim();
       if (!commitResult.ok) {
+        finalStatus = 'error';
+        finalLabel = /nothing to commit/i.test(commitOutput) ? 'Nothing to commit' : 'Git commit failed';
         if (/nothing to commit/i.test(commitOutput)) {
           appendMessage('system', 'Git reported that there was nothing to commit.');
         } else {
@@ -641,15 +673,19 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
       const pushResult = await runDirectProcess('git', ['push']);
       if (!pushResult.ok) {
+        finalStatus = 'error';
+        finalLabel = 'Git push failed';
         appendMessage('system', 'Git push failed. Review the transcript above for the exact error.');
         return;
       }
 
       appendMessage('assistant', `Committed and pushed your current changes with message: ${message}`);
     } catch (error) {
+      finalStatus = 'error';
+      finalLabel = 'Git shortcut failed';
       appendMessage('system', `Git shortcut failed: ${error.message}`);
     } finally {
-      finishRun();
+      finishRun(finalStatus, finalLabel);
       setInput('');
     }
   }, [appendMessage, finishRun, resetRunState, runDirectProcess]);
@@ -661,6 +697,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
       return;
     }
 
+    let finalStatus = 'success';
+    let finalLabel = 'Undo complete';
     setIsThinking(true);
     resetRunState('Undo running');
     setScrollOffset(0);
@@ -672,9 +710,11 @@ const ChatScreen = ({ mode, model, onExit }) => {
       lastCheckpointRef.current = null;
       appendMessage('system', 'Reverted the last AI workspace changes.');
     } catch (error) {
+      finalStatus = 'error';
+      finalLabel = 'Undo failed';
       appendMessage('system', `Undo failed: ${error.message}`);
     } finally {
-      finishRun();
+      finishRun(finalStatus, finalLabel);
       setInput('');
     }
   }, [appendMessage, finishRun, pushActivity, resetRunState]);
@@ -988,6 +1028,8 @@ const ChatScreen = ({ mode, model, onExit }) => {
     resetRunState(`${activeMode.label} running`);
     const reporter = buildReporter(activeMode);
     let resultMsg;
+    let finalStatus = 'success';
+    let finalLabel = `${activeMode.label} complete`;
 
     try {
       const msgSnapshot = [...messages];
@@ -1014,11 +1056,21 @@ const ChatScreen = ({ mode, model, onExit }) => {
         resultMsg = reviseResult;
       }
     } catch (error) {
+      finalStatus = 'error';
+      finalLabel = `${activeMode.label} failed`;
       resultMsg = { type: 'system', text: `Error: ${error.message}`, id: nextId() };
     }
 
+    if (resultMsg?.type === 'system') {
+      finalStatus = 'error';
+      if (resultMsg.text === 'Execution aborted.') finalLabel = 'Run interrupted';
+      else if (resultMsg.text?.startsWith('API Error:')) finalLabel = `${activeMode.label} failed`;
+      else if (resultMsg.text?.startsWith('Agent Error:')) finalLabel = `${activeMode.label} failed`;
+      else if (!finalLabel || finalLabel.endsWith('complete')) finalLabel = `${activeMode.label} failed`;
+    }
+
     setMessages((previous) => [...previous, resultMsg]);
-    finishRun();
+    finishRun(finalStatus, finalLabel);
     setInput('');
   }, [mode, messages, nextId, buildReporter, finishRun, resetRunState, runAgentMode, runAskMode]);
 
@@ -1295,6 +1347,17 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const activeToolEntryId = useMemo(() => (
     isThinking ? findLatestLiveToolEntryId(activityLog) : null
   ), [activityLog, isThinking]);
+  const visibleLiveStatus = isThinking ? { kind: 'thinking', label: streamLabel } : liveStatus;
+  const liveStatusColor = visibleLiveStatus?.kind === 'error'
+    ? COLORS.red
+    : visibleLiveStatus?.kind === 'success'
+      ? COLORS.green
+      : COLORS.orange;
+  const liveStatusIcon = visibleLiveStatus?.kind === 'error'
+    ? '×'
+    : visibleLiveStatus?.kind === 'success'
+      ? '✓'
+      : spinnerFrame;
 
   const maxLineWidth = Math.max(20, dims.columns - 4);
   const allLines = useMemo(() => {
@@ -1400,7 +1463,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   }, [messages, isThinking, activityLog, streamResponseContent, maxLineWidth, expandedBlocks, activeToolEntryId, showStreamingCursor, spinnerFrame]);
 
   let uiReservedLines = 4; 
-  if (isThinking) uiReservedLines += 2;
+  if (visibleLiveStatus) uiReservedLines += 2;
   
   if (pendingQuestion) {
       const qStr = typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question;
@@ -1467,10 +1530,10 @@ const ChatScreen = ({ mode, model, onExit }) => {
       </Box>
 
       {/* Live Status Tracker */}
-      {isThinking && (
+      {visibleLiveStatus && (
         <Box flexDirection="row" paddingX={1} marginBottom={1} marginTop={1}>
-           <Text color={COLORS.orange}>{spinnerFrame} {streamLabel}... </Text>
-           <Text color={COLORS.dim}>({elapsedTime}s · esc to interrupt)</Text>
+           <Text color={liveStatusColor}>{liveStatusIcon} {visibleLiveStatus.label}... </Text>
+           {isThinking ? <Text color={COLORS.dim}>({elapsedTime}s · esc to interrupt)</Text> : null}
         </Box>
       )}
 
