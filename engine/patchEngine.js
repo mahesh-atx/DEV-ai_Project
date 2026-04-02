@@ -18,6 +18,73 @@ function logWithOptions(options, ...args) {
   }
 }
 
+function summarizePatch(patchText) {
+  const lines = String(patchText || "").split("\n");
+  let additions = 0;
+  let removals = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) removals++;
+  }
+
+  return { additions, removals };
+}
+
+function buildDiffPreviewFromPatch(patchText, maxLines = 16) {
+  const lines = String(patchText || "").split("\n");
+  const preview = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (match) {
+        oldLine = Number(match[1]);
+        newLine = Number(match[2]);
+        inHunk = true;
+      }
+      continue;
+    }
+
+    if (!inHunk || line.startsWith("\\") || line.startsWith("diff --git") || line.startsWith("Index:")) {
+      continue;
+    }
+
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      preview.push({ type: "added", lineNum: String(newLine), text: line });
+      newLine++;
+      continue;
+    }
+
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      preview.push({ type: "removed", lineNum: String(oldLine), text: line });
+      oldLine++;
+      continue;
+    }
+
+    if (line.startsWith(" ")) {
+      preview.push({ type: "context", lineNum: String(newLine), text: line });
+      oldLine++;
+      newLine++;
+    }
+  }
+
+  if (preview.length <= maxLines) return preview;
+
+  const clipped = preview.slice(0, maxLines);
+  const hiddenCount = preview.length - maxLines;
+  clipped.push({
+    type: "context",
+    lineNum: "",
+    text: `... ${hiddenCount} more diff line${hiddenCount === 1 ? "" : "s"}`,
+  });
+  return clipped;
+}
+
 function similarity(a, b) {
   const la = a.length, lb = b.length;
   if (la === 0 || lb === 0) return 0;
@@ -126,7 +193,8 @@ export function patchFile(projectDir, filePath, newContent, edits = null, option
         logWithOptions(options, "  ❌ Cannot edit (file doesn't exist):", normalized);
         return;
       }
-      let content = fs.readFileSync(fullPath, "utf8");
+      const originalContent = fs.readFileSync(fullPath, "utf8");
+      let content = originalContent;
       let applied = 0, failed = 0;
 
       for (const edit of edits) {
@@ -152,12 +220,17 @@ export function patchFile(projectDir, filePath, newContent, edits = null, option
       }
 
       fs.writeFileSync(fullPath, content, "utf8");
+      const patch = createPatch(normalized, originalContent, content, "", "", { context: 2 });
+      const { additions, removals } = summarizePatch(patch);
       emitReporter(reporter, "fileChange", {
         path: normalized,
         action: "edit",
         status: failed > 0 ? "warning" : "success",
         applied,
         failed,
+        additions,
+        removals,
+        diffPreview: buildDiffPreviewFromPatch(patch),
       });
       logWithOptions(options, `  🔧 Surgical edit: ${normalized} (${applied} applied, ${failed} failed)`);
       return;
@@ -166,10 +239,15 @@ export function patchFile(projectDir, filePath, newContent, edits = null, option
     // === FULL OVERWRITE MODE (backward-compatible) ===
     if (!fs.existsSync(fullPath)) {
       fs.writeFileSync(fullPath, newContent, "utf8");
+      const patch = createPatch(normalized, "", newContent, "", "", { context: 2 });
+      const { additions, removals } = summarizePatch(patch);
       emitReporter(reporter, "fileChange", {
         path: normalized,
         action: "create",
         status: "success",
+        additions,
+        removals,
+        diffPreview: buildDiffPreviewFromPatch(patch),
       });
       logWithOptions(options, "  📄 Created:", normalized);
       return;
@@ -186,13 +264,17 @@ export function patchFile(projectDir, filePath, newContent, edits = null, option
       return;
     }
 
-    const patch = createPatch(filePath, oldContent, newContent);
+    const patch = createPatch(normalized, oldContent, newContent, "", "", { context: 2 });
+    const { additions, removals } = summarizePatch(patch);
     fs.writeFileSync(fullPath, newContent, "utf8");
     emitReporter(reporter, "fileChange", {
       path: normalized,
       action: "patch",
       status: "success",
       diffBytes: patch.length,
+      additions,
+      removals,
+      diffPreview: buildDiffPreviewFromPatch(patch),
     });
     logWithOptions(options, "  🛠 Patched:", normalized);
   } catch (e) {

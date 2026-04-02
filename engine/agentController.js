@@ -47,6 +47,111 @@ function previewToolResult(result) {
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
+function shouldCollapseToolResult(result) {
+  const text = String(result || "");
+  if (!text) return false;
+  return text.includes("\n") || text.length > 160;
+}
+
+const TOOL_NAME_ALIASES = {
+  bash: "run_command",
+  read: "read_file",
+  write: "write_file",
+  edit: "edit_file",
+  list: "list_files",
+  glob: "search_files",
+  grep: "search_content",
+  question: "ask_user",
+};
+
+function normalizeToolName(toolName) {
+  return TOOL_NAME_ALIASES[toolName] || toolName;
+}
+
+function normalizeToolArgs(toolName, toolArgs = {}) {
+  if (toolName === "bash") {
+    return { command: toolArgs.command, cwd: toolArgs.workdir, timeout: toolArgs.timeout };
+  }
+  if (toolName === "read") {
+    return { path: toolArgs.filePath, offset: toolArgs.offset, limit: toolArgs.limit };
+  }
+  if (toolName === "write") {
+    return { path: toolArgs.filePath, content: toolArgs.content };
+  }
+  if (toolName === "edit") {
+    return {
+      path: toolArgs.filePath,
+      search: toolArgs.oldString,
+      replace: toolArgs.newString,
+      replaceAll: toolArgs.replaceAll === true,
+      edits: [{ search: toolArgs.oldString, replace: toolArgs.newString }],
+    };
+  }
+  if (toolName === "list") {
+    return { path: toolArgs.path };
+  }
+  if (toolName === "glob") {
+    return { pattern: toolArgs.pattern, path: toolArgs.path };
+  }
+  if (toolName === "grep") {
+    return { query: toolArgs.pattern, path: toolArgs.path, include: toolArgs.include };
+  }
+  return toolArgs;
+}
+
+function countContentLines(text) {
+  const value = String(text || "");
+  if (!value) return 0;
+  return value.split("\n").length;
+}
+
+function countSectionItems(result, prefix) {
+  const value = String(result || "");
+  if (!value.startsWith(prefix)) return 0;
+  const rest = value.slice(prefix.length).trim();
+  if (!rest) return 0;
+  return rest.split("\n").filter(Boolean).length;
+}
+
+function summarizeToolResult(toolName, toolResult, args = {}) {
+  const resultText = String(toolResult || "");
+
+  if (!resultText) return "";
+  if (resultText.startsWith("Error")) return previewToolResult(resultText);
+
+  if (toolName === "read_file") {
+    const lineCount = countContentLines(resultText);
+    const path = args.path || "file";
+    return `Read ${lineCount} line${lineCount === 1 ? "" : "s"} from ${path}`;
+  }
+
+  if (toolName === "list_files") {
+    const entryCount = countSectionItems(resultText, "Entries:\n");
+    if (entryCount > 0) {
+      return `Listed ${entryCount} path${entryCount === 1 ? "" : "s"}`;
+    }
+    return previewToolResult(resultText);
+  }
+
+  if (toolName === "search_files") {
+    const matchCount = countSectionItems(resultText, "Found files:\n");
+    if (matchCount > 0) {
+      return `Found ${matchCount} matching file${matchCount === 1 ? "" : "s"}`;
+    }
+    return previewToolResult(resultText);
+  }
+
+  if (toolName === "search_content") {
+    const matchCount = countSectionItems(resultText, "Found occurrences:\n");
+    if (matchCount > 0) {
+      return `Found ${matchCount} matching occurrence${matchCount === 1 ? "" : "s"}`;
+    }
+    return previewToolResult(resultText);
+  }
+
+  return previewToolResult(resultText);
+}
+
 const OS_INFO = `Operating System: ${os.platform()} (${os.release()}).
 If on Windows, use 'dir' instead of 'ls', and 'python' or 'py' instead of 'python3'.`;
 
@@ -414,13 +519,189 @@ const TOOLS_SCHEMA = [
   }
 ];
 
+TOOLS_SCHEMA.push(
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Run a terminal command in the project workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The shell command to execute." },
+          workdir: { type: "string", description: "Optional working directory relative to the project root." },
+          timeout: { type: "number", description: "Optional timeout in milliseconds." },
+          description: { type: "string", description: "Optional short description of the command." }
+        },
+        required: ["command"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read a file from the workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "The path to the file to read." },
+          offset: { type: "number", description: "Optional starting line number (1-based)." },
+          limit: { type: "number", description: "Optional maximum number of lines to return." }
+        },
+        required: ["filePath"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "write",
+      description: "Create or overwrite a file in the workspace.",
+      parameters: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "The path to the file." },
+          content: { type: "string", description: "The complete content to write." }
+        },
+        required: ["filePath", "content"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit",
+      description: "Replace text inside an existing file.",
+      parameters: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "The path to the file." },
+          oldString: { type: "string", description: "The text to replace." },
+          newString: { type: "string", description: "The replacement text." },
+          replaceAll: { type: "boolean", description: "Whether to replace all occurrences." }
+        },
+        required: ["filePath", "oldString", "newString"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob",
+      description: "Search the workspace for files matching a glob pattern.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "The glob pattern to match." },
+          path: { type: "string", description: "Optional subdirectory to search from." }
+        },
+        required: ["pattern"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "grep",
+      description: "Search inside files for matching text or regex.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "The search text or regex." },
+          path: { type: "string", description: "Optional subdirectory to search from." },
+          include: { type: "string", description: "Optional file glob filter." }
+        },
+        required: ["pattern"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "list",
+      description: "List entries in a directory.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Optional directory to list." }
+        },
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "question",
+      description: "Ask one or more questions and wait for the user's answers.",
+      parameters: {
+        type: "object",
+        properties: {
+          questions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                question: { type: "string", description: "The question to ask." },
+                header: { type: "string", description: "Short label for the question." },
+                options: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      label: { type: "string", description: "Display label for the option." },
+                      description: { type: "string", description: "Optional explanation." }
+                    },
+                    required: ["label"],
+                    additionalProperties: false
+                  }
+                },
+                multiple: { type: "boolean", description: "Whether multiple selections are allowed." }
+              },
+              required: ["question", "header", "options"],
+              additionalProperties: false
+            }
+          }
+        },
+        required: ["questions"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "lsp",
+      description: "Use lightweight workspace-backed language intelligence.",
+      parameters: {
+        type: "object",
+        properties: {
+          operation: { type: "string", enum: ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"] },
+          filePath: { type: "string", description: "The file path to inspect." },
+          line: { type: "number", description: "The 1-based line number." },
+          character: { type: "number", description: "The 1-based character offset." }
+        },
+        required: ["operation", "filePath", "line", "character"],
+        additionalProperties: false
+      }
+    }
+  }
+);
+
 function getToolsForRole(role) {
   const universal = ["ask_user", "delegate_task"];
-  if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", "codesearch", "codebase_search", "todoread", "todowrite", ...universal].includes(t.function.name));
-  if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "multiedit", "read_file", "finish_task", "todoread", "todowrite", ...universal].includes(t.function.name));
-  if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", "todoread", "todowrite", ...universal].includes(t.function.name));
-  if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", ...universal].includes(t.function.name));
-  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "todoread", "todowrite"].includes(t.function.name));
+  if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", "codesearch", "codebase_search", "todoread", "todowrite", "read", "glob", "grep", "list", "question", "lsp", ...universal].includes(t.function.name));
+  if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "multiedit", "read_file", "finish_task", "todoread", "todowrite", "read", "write", "edit", "question", "lsp", ...universal].includes(t.function.name));
+  if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", "todoread", "todowrite", "bash", "read", "question", ...universal].includes(t.function.name));
+  if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", "read", "glob", "grep", "list", "question", ...universal].includes(t.function.name));
+  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "todoread", "todowrite", "bash", "read", "glob", "grep", "list", "question"].includes(t.function.name));
   return TOOLS_SCHEMA.filter(t => t.function.name !== 'task');
 }
 
@@ -428,33 +709,41 @@ function getToolsForRole(role) {
  * Execute a single tool call and return the result string
  */
 async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, reporter) {
-  if (toolName === "read_file") {
-    return runtime.readFile(toolArgs.path);
+  const normalizedToolName = normalizeToolName(toolName);
+  const normalizedArgs = normalizeToolArgs(toolName, toolArgs);
+
+  if (normalizedToolName === "read_file") {
+    const content = runtime.readFile(normalizedArgs.path);
+    const lines = String(content || "").split("\n");
+    const offset = Math.max(1, Number(normalizedArgs.offset || 1));
+    const limit = Number.isFinite(Number(normalizedArgs.limit)) ? Math.max(1, Number(normalizedArgs.limit)) : null;
+    const sliced = limit ? lines.slice(offset - 1, offset - 1 + limit) : lines.slice(offset - 1);
+    return sliced.join("\n");
   }
-  if (toolName === "list_files") {
-    const listPath = toolArgs.path || ".";
+  if (normalizedToolName === "list_files") {
+    const listPath = normalizedArgs.path || ".";
     if (typeof runtime.listFiles === "function") {
-      const results = await runtime.listFiles(listPath, toolArgs.depth, toolArgs.includeHidden);
+      const results = await runtime.listFiles(listPath, normalizedArgs.depth, normalizedArgs.includeHidden);
       return results.length > 0 ? `Entries:\n${results.join('\n')}` : "No entries found.";
     }
     return "Error: list_files tool not registered.";
   }
-  if (toolName === "search_files") {
+  if (normalizedToolName === "search_files") {
     if (typeof runtime.searchFiles === 'function') {
-      const results = await runtime.searchFiles(toolArgs.pattern);
+      const results = await runtime.searchFiles(normalizedArgs.pattern, { path: normalizedArgs.path });
       return results.length > 0 ? `Found files:\n${results.join('\n')}` : "No matching files found.";
     }
     return "Error: search_files tool not registered.";
   }
-  if (toolName === "search_content") {
+  if (normalizedToolName === "search_content") {
     if (typeof runtime.searchContent === 'function') {
-      const results = await runtime.searchContent(toolArgs.query);
+      const results = await runtime.searchContent(normalizedArgs.query, { path: normalizedArgs.path, include: normalizedArgs.include });
       return results.length > 0 ? `Found occurrences:\n${results.join('\n')}` : "No matches found.";
     }
     return "Error: search_content tool not registered.";
   }
-  if (toolName === "run_command") {
-    const output = await runtime.runCommand(toolArgs.command, toolArgs.cwd, { reporter, silent: true });
+  if (normalizedToolName === "run_command") {
+    const output = await runtime.runCommand(normalizedArgs.command, normalizedArgs.cwd, { reporter, silent: true, timeout: normalizedArgs.timeout });
     if (output && typeof output.logs === 'string') return output.logs || "Command executed with no output.";
     if (output && (typeof output.stdout === 'string' || typeof output.stderr === 'string')) {
       const out = (output.stdout || '').trim();
@@ -466,17 +755,41 @@ async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, 
     }
     return "Command executed.";
   }
-  if (toolName === "websearch") {
+  if (normalizedToolName === "websearch") {
     const { websearch } = await import("../utils/webTools.js");
-    const res = await websearch(toolArgs.query, toolArgs.numResults || 8);
+    const res = await websearch(normalizedArgs.query, normalizedArgs.numResults || 8);
     if (res.error) return `Error: ${res.error}`;
     return JSON.stringify(res.results, null, 2);
   }
-  if (toolName === "webfetch") {
+  if (normalizedToolName === "webfetch") {
     const { webfetch } = await import("../utils/webTools.js");
-    const res = await webfetch(toolArgs.url);
+    const res = await webfetch(normalizedArgs.url);
     if (res.error) return `Error: ${res.error}`;
     return res.content;
+  }
+  if (toolName === "question") {
+    if (typeof reporter?.askUser !== "function") {
+      return "Error: question requires a TUI reporter with askUser handler.";
+    }
+
+    const answers = [];
+    for (const question of normalizedArgs.questions || []) {
+      const optionLabels = Array.isArray(question.options) ? question.options.map((option) => option.label) : [];
+      const answer = await reporter.askUser({
+        title: question.header || "Question",
+        question: question.question,
+        options: optionLabels,
+      });
+      answers.push({ header: question.header || "Question", answer });
+    }
+
+    return JSON.stringify(answers, null, 2);
+  }
+  if (toolName === "lsp") {
+    if (typeof runtime.lsp === "function") {
+      return runtime.lsp(normalizedArgs);
+    }
+    return "Error: lsp tool not registered.";
   }
   return `Tool ${toolName} not supported in batch mode.`;
 }
@@ -493,7 +806,7 @@ async function buildSystemPrompt(role, modelConfig, extraContext, projectRoot) {
   if (soul) layers.push(soul);
 
   // Layer 2: Provider-specific prompt
-  const providerPrompt = loadProviderPrompt(modelConfig?.model || '');
+  const providerPrompt = loadProviderPrompt(modelConfig?.id || modelConfig?.model || '');
   if (providerPrompt) layers.push(providerPrompt);
 
   // Layer 3: Environment info
@@ -600,37 +913,81 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           continue;
         }
 
+        const requestedToolName = tc.function.name;
+        const normalizedToolName = normalizeToolName(requestedToolName);
+        const normalizedArgs = normalizeToolArgs(requestedToolName, args);
+
         const argsArray = Object.keys(args || {}).map(k => `${k}="${String(args[k]).substring(0, 30)}"`);
         emitReporter(reporter, "toolExecution", {
-          toolName: tc.function.name,
+          toolName: requestedToolName,
           args: argsArray.join(', '),
+          argsObject: args,
         });
 
         let toolResultStr = "";
 
         try {
-          if (tc.function.name === "write_file") {
-            if (role === 'plan' && !args.path.replace(/\\/g, '/').match(/\.kilo\/plans\/.*\.md$/)) {
+          if (requestedToolName === "question") {
+            if (typeof reporter?.askUser !== "function") {
+              toolResultStr = "Error: question requires a TUI reporter with askUser handler.";
+              statsErrors++;
+            } else {
+              const answers = [];
+              for (const question of normalizedArgs.questions || []) {
+                const optionLabels = Array.isArray(question.options) ? question.options.map((option) => option.label) : [];
+                const answer = await reporter.askUser({
+                  title: question.header || "Question",
+                  question: question.question,
+                  options: optionLabels,
+                });
+                answers.push({ header: question.header || "Question", answer });
+              }
+              toolResultStr = JSON.stringify(answers, null, 2);
+            }
+          }
+          else if (requestedToolName === "lsp") {
+            if (typeof runtime.lsp === "function") {
+              toolResultStr = await runtime.lsp(normalizedArgs);
+            } else {
+              toolResultStr = "Error: lsp tool not registered in runtime.";
+              statsErrors++;
+            }
+          }
+          else if (normalizedToolName === "write_file") {
+            if (role === 'plan' && !normalizedArgs.path.replace(/\\/g, '/').match(/\.kilo\/plans\/.*\.md$/)) {
                toolResultStr = `Error: write_file permission denied. In Plan mode, you may ONLY write to the '.kilo/plans/' directory with a '.md' extension.`;
                statsErrors++;
             } else {
-               runtime.patchFile(args.path, args.content, undefined, { reporter, silent: true });
-               toolResultStr = `Successfully wrote ${args.path}`;
+               runtime.patchFile(normalizedArgs.path, normalizedArgs.content, undefined, { reporter, silent: true });
+               toolResultStr = `Successfully wrote ${normalizedArgs.path}`;
                statsFilesCreated++;
             }
           }
-          else if (tc.function.name === "edit_file") {
+          else if (normalizedToolName === "edit_file") {
             if (role === 'plan') {
                toolResultStr = `Error: edit_file permission denied in Plan mode. You must only create new files in '.kilo/plans/' using write_file.`;
                statsErrors++;
             } else {
-               runtime.patchFile(args.path, null, args.edits, { reporter, silent: true });
-               toolResultStr = `Successfully edited ${args.path}`;
-               statsFilesEdited++;
+               if (requestedToolName === "edit" && normalizedArgs.replaceAll) {
+                 const existingContent = runtime.readFile(normalizedArgs.path);
+                 if (!normalizedArgs.search) {
+                   toolResultStr = "Error: edit requires oldString when replaceAll is true.";
+                   statsErrors++;
+                 } else {
+                   const updatedContent = existingContent.split(normalizedArgs.search).join(normalizedArgs.replace);
+                   runtime.patchFile(normalizedArgs.path, updatedContent, undefined, { reporter, silent: true });
+                   toolResultStr = `Successfully edited ${normalizedArgs.path}`;
+                   statsFilesEdited++;
+                 }
+               } else {
+                 runtime.patchFile(normalizedArgs.path, null, normalizedArgs.edits || args.edits, { reporter, silent: true });
+                 toolResultStr = `Successfully edited ${normalizedArgs.path}`;
+                 statsFilesEdited++;
+               }
             }
           }
-          else if (tc.function.name === "run_command") {
-            const output = await runtime.runCommand(args.command, args.cwd, { reporter, silent: true });
+          else if (normalizedToolName === "run_command") {
+            const output = await runtime.runCommand(normalizedArgs.command, normalizedArgs.cwd, { reporter, silent: true, timeout: normalizedArgs.timeout });
             statsCommandsRun++;
 
             if (output && typeof output.logs === 'string') {
@@ -646,37 +1003,41 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                toolResultStr = output;
             } else {
                toolResultStr = "Command executed.";
+             }
             }
+            else if (normalizedToolName === "list_files") {
+             const listPath = normalizedArgs.path || ".";
+             if (typeof runtime.listFiles === "function") {
+               const results = await runtime.listFiles(listPath, normalizedArgs.depth, normalizedArgs.includeHidden);
+               toolResultStr = results.length > 0 ? `Entries:\n${results.join('\n')}` : "No entries found.";
+             } else {
+               toolResultStr = "Error: list_files tool not registered in runtime.";
+             }
            }
-           else if (tc.function.name === "list_files") {
-            const listPath = args.path || ".";
-            if (typeof runtime.listFiles === "function") {
-              const results = await runtime.listFiles(listPath, args.depth, args.includeHidden);
-              toolResultStr = results.length > 0 ? `Entries:\n${results.join('\n')}` : "No entries found.";
-            } else {
-              toolResultStr = "Error: list_files tool not registered in runtime.";
-            }
-          }
-          else if (tc.function.name === "search_files") {
+          else if (normalizedToolName === "search_files") {
             if (typeof runtime.searchFiles === 'function') {
-              const results = await runtime.searchFiles(args.pattern);
+              const results = await runtime.searchFiles(normalizedArgs.pattern, { path: normalizedArgs.path });
               toolResultStr = results.length > 0 ? `Found files:\n${results.join('\n')}` : "No matching files found.";
             } else {
               toolResultStr = "Error: search_files tool not registered in runtime.";
             }
           }
-          else if (tc.function.name === "search_content") {
+          else if (normalizedToolName === "search_content") {
             if (typeof runtime.searchContent === 'function') {
-              const results = await runtime.searchContent(args.query);
+              const results = await runtime.searchContent(normalizedArgs.query, { path: normalizedArgs.path, include: normalizedArgs.include });
               toolResultStr = results.length > 0 ? `Found occurrences:\n${results.join('\n')}` : "No matches found.";
             } else {
               toolResultStr = "Error: search_content tool not registered in runtime.";
             }
           }
-          else if (tc.function.name === "read_file") {
+          else if (normalizedToolName === "read_file") {
             try {
-               const content = runtime.readFile(args.path);
-               toolResultStr = content;
+               const content = runtime.readFile(normalizedArgs.path);
+               const lines = String(content || "").split("\n");
+               const offset = Math.max(1, Number(normalizedArgs.offset || 1));
+               const limit = Number.isFinite(Number(normalizedArgs.limit)) ? Math.max(1, Number(normalizedArgs.limit)) : null;
+               const sliced = limit ? lines.slice(offset - 1, offset - 1 + limit) : lines.slice(offset - 1);
+               toolResultStr = sliced.join("\n");
             } catch (err) {
                toolResultStr = `Error reading file: ${err.message}`;
             }
@@ -750,6 +1111,81 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
               statsFilesEdited++;
             }
           }
+          else if (tc.function.name === "apply_patch") {
+            if (role === 'plan') {
+              toolResultStr = `Error: apply_patch permission denied in Plan mode.`;
+              statsErrors++;
+            } else {
+              try {
+                const patchText = args.patchText || '';
+                const lines = patchText.split('\n');
+                let currentFile = null;
+                let currentContent = '';
+                let inAddBlock = false;
+                let filesChanged = 0;
+                
+                for (const line of lines) {
+                  if (line.startsWith('*** Add File: ')) {
+                    currentFile = line.substring('*** Add File: '.length).trim();
+                    currentContent = '';
+                    inAddBlock = true;
+                  } else if (line.startsWith('*** Delete File: ')) {
+                    const deletePath = line.substring('*** Delete File: '.length).trim();
+                    const fullPath = join(PROJECT_ROOT, deletePath);
+                    if (existsSync(fullPath)) {
+                      const fs = await import('fs/promises');
+                      await fs.unlink(fullPath);
+                      filesChanged++;
+                    }
+                    currentFile = null;
+                    inAddBlock = false;
+                  } else if (line.startsWith('*** Update File: ')) {
+                    currentFile = line.substring('*** Update File: '.length).trim();
+                    currentContent = '';
+                    inAddBlock = false;
+                  } else if (line.startsWith('*** Begin Patch') || line.startsWith('*** End Patch') || line.startsWith('*** Move to:')) {
+                    // Skip envelope headers
+                  } else if (line.startsWith('+') && currentFile) {
+                    currentContent += line.substring(1) + '\n';
+                  } else if (line.startsWith('@@') && currentFile) {
+                    // Context line in update block - load existing content if first context
+                    if (!inAddBlock && currentContent === '') {
+                      try {
+                        const fullPath = join(PROJECT_ROOT, currentFile);
+                        currentContent = readFileSync(fullPath, 'utf-8');
+                      } catch (e) {
+                        // File doesn't exist, start fresh
+                      }
+                    }
+                  } else if (line.startsWith('-') && currentFile) {
+                    // Remove line from content
+                    const removeText = line.substring(1) + '\n';
+                    if (currentContent.includes(removeText)) {
+                      currentContent = currentContent.replace(removeText, '');
+                    }
+                  } else if (line.trim() === '' && currentFile && currentContent !== '') {
+                    // End of file block - write the file
+                    runtime.patchFile(currentFile, currentContent, undefined, { reporter, silent: true });
+                    filesChanged++;
+                    currentFile = null;
+                    currentContent = '';
+                  }
+                }
+                
+                // Handle last file if no trailing blank line
+                if (currentFile && currentContent !== '') {
+                  runtime.patchFile(currentFile, currentContent, undefined, { reporter, silent: true });
+                  filesChanged++;
+                }
+                
+                toolResultStr = `Successfully applied patch to ${filesChanged} file(s)`;
+                statsFilesEdited += filesChanged;
+              } catch (err) {
+                toolResultStr = `Error applying patch: ${err.message}`;
+                statsErrors++;
+              }
+            }
+          }
           else if (tc.function.name === "batch") {
             const toolCalls = args.tool_calls || [];
             const results = [];
@@ -811,8 +1247,11 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
         }
 
         emitReporter(reporter, "toolResult", {
-          toolName: tc.function.name,
-          text: previewToolResult(toolResultStr),
+          toolName: requestedToolName,
+          text: summarizeToolResult(normalizedToolName, toolResultStr, normalizedArgs),
+          fullText: String(toolResultStr || ""),
+          isCollapsible: shouldCollapseToolResult(toolResultStr),
+          args: normalizedArgs,
         });
 
         agentMessages.push({
