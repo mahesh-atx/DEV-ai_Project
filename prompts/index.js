@@ -1,7 +1,7 @@
 /**
- * Prompt Selector — Scoring-Based Routing Engine
- * Intelligently selects the appropriate system prompt using weighted scoring
- * v2.0 — Upgraded from basic keyword matching to priority scoring
+ * Prompt Selector — Hybrid Selection Engine
+ * Supports both agent-name-based selection (KiloCode-style) and weighted scoring fallback
+ * v3.0 — Added multi-layer system prompt support
  */
 
 import fs from 'fs';
@@ -16,9 +16,50 @@ const websitePrompt = fs.readFileSync(path.join(__dirname, 'website.txt'), 'utf8
 const webappPrompt = fs.readFileSync(path.join(__dirname, 'webapp.txt'), 'utf8');
 const scriptPrompt = fs.readFileSync(path.join(__dirname, 'script.txt'), 'utf8');
 
+// Agent role prompts (KiloCode-style)
+const ROLE_PROMPTS = {
+  general: null, // Uses base.txt + scoring
+  explorer: null, // Uses explorer.txt
+  coder: null, // Uses coder.txt
+  debugger: null, // Uses debugger.txt
+  orchestrator: null, // Uses orchestrator.txt
+  plan: null, // Uses planner.txt
+  ask: null, // Uses ask-only.txt
+};
+
+const ROLE_PROMPT_FILES = {
+  general: 'general.txt',
+  explorer: 'explorer.txt',
+  coder: 'coder.txt',
+  debugger: 'debugger.txt',
+  orchestrator: 'orchestrator.txt',
+  plan: 'planner.txt',
+  ask: 'ask-only.txt',
+};
+
+for (const [role, fileName] of Object.entries(ROLE_PROMPT_FILES)) {
+  try {
+    ROLE_PROMPTS[role] = fs.readFileSync(path.join(__dirname, fileName), 'utf8');
+  } catch (e) {
+    ROLE_PROMPTS[role] = null;
+  }
+}
+
+/**
+ * Get prompt by agent role name (KiloCode-style)
+ * @param {string} role - Agent role name
+ * @param {Object} modelConfig - Model configuration for provider detection
+ * @param {string} extraContext - Additional context to append
+ * @returns {string} The system prompt for the role
+ */
+export function getRolePrompt(role, modelConfig = {}, extraContext = '') {
+  const rolePrompt = ROLE_PROMPTS[role] || ROLE_PROMPTS.general || '';
+  if (!rolePrompt) return basePrompt + (extraContext ? `\n\n${extraContext}` : '');
+  return basePrompt + rolePrompt + (extraContext ? `\n\n${extraContext}` : '');
+}
+
 /**
  * Weighted keyword definitions for each mode
- * Higher weight = stronger signal for that mode
  */
 const WEBSITE_KEYWORDS = {
   // High confidence triggers (weight: 3)

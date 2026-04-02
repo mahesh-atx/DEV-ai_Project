@@ -1,0 +1,1 @@
+List directory contents. Returns entries one per line with a trailing `/` for subdirectories.

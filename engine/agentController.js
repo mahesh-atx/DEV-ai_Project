@@ -6,7 +6,17 @@
 import { runPolishAgent } from "./polishAgent.js";
 import { logErrorToFile } from "../utils/errorLog.js";
 import { loadPrompt } from "../prompts/promptLoader.js";
+import { loadToolPrompt } from "../tools/loader.js";
+import { loadSoulPrompt, loadProviderPrompt } from "../prompts/systemPrompt.js";
+import { buildInstructionPrompt } from "../prompts/instructionLoader.js";
 import os from "os";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = join(__dirname, "..");
+const KILO_DIR = join(PROJECT_ROOT, ".kilo");
 
 function emitReporter(reporter, method, payload) {
   if (reporter && typeof reporter[method] === "function") {
@@ -283,17 +293,225 @@ const TOOLS_SCHEMA = [
         additionalProperties: false
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "multiedit",
+      description: "Make multiple edits to a single file in one operation. Prefer this over edit_file when making several changes to the same file.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path to the file." },
+          edits: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                search: { type: "string", description: "Exact matching text to replace." },
+                replace: { type: "string", description: "The new text to insert." },
+                replaceAll: { type: "boolean", description: "Replace all occurrences." }
+              },
+              required: ["search", "replace"]
+            }
+          }
+        },
+        required: ["path", "edits"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "batch",
+      description: "Execute multiple independent tool calls concurrently to reduce latency. Pass an array of tool calls to run in parallel.",
+      parameters: {
+        type: "object",
+        properties: {
+          tool_calls: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                tool: { type: "string", description: "The name of the tool to execute." },
+                parameters: { type: "object", description: "Parameters for the tool." }
+              },
+              required: ["tool", "parameters"]
+            },
+            description: "Array of tool calls to execute in parallel (max 25)."
+          }
+        },
+        required: ["tool_calls"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "codesearch",
+      description: "Search for API, library, and SDK documentation context using Exa Code API.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query for APIs, libraries, SDKs." },
+          tokensNum: { type: "number", description: "Number of tokens to return (1000-50000)." }
+        },
+        required: ["query"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "todowrite",
+      description: "Create and manage a structured task list for the current coding session.",
+      parameters: {
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string", description: "Brief description of the task." },
+                status: { type: "string", enum: ["pending", "in_progress", "completed", "cancelled"] },
+                priority: { type: "string", enum: ["high", "medium", "low"] }
+              },
+              required: ["content", "status", "priority"]
+            }
+          }
+        },
+        required: ["todos"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "todoread",
+      description: "Read the current to-do list for the session.",
+      parameters: { type: "object", properties: {}, additionalProperties: false }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "codebase_search",
+      description: "Search the codebase using natural language to find features or understand how things work.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Natural language search query." }
+        },
+        required: ["query"],
+        additionalProperties: false
+      }
+    }
   }
 ];
 
 function getToolsForRole(role) {
   const universal = ["ask_user", "delegate_task"];
-  if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", ...universal].includes(t.function.name));
-  if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "read_file", "finish_task", ...universal].includes(t.function.name));
-  if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", ...universal].includes(t.function.name));
+  if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", "codesearch", "codebase_search", "todoread", "todowrite", ...universal].includes(t.function.name));
+  if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "multiedit", "read_file", "finish_task", "todoread", "todowrite", ...universal].includes(t.function.name));
+  if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", "todoread", "todowrite", ...universal].includes(t.function.name));
   if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", ...universal].includes(t.function.name));
-  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task"].includes(t.function.name));
+  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "todoread", "todowrite"].includes(t.function.name));
   return TOOLS_SCHEMA.filter(t => t.function.name !== 'task');
+}
+
+/**
+ * Execute a single tool call and return the result string
+ */
+async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, reporter) {
+  if (toolName === "read_file") {
+    return runtime.readFile(toolArgs.path);
+  }
+  if (toolName === "list_files") {
+    const listPath = toolArgs.path || ".";
+    if (typeof runtime.listFiles === "function") {
+      const results = await runtime.listFiles(listPath, toolArgs.depth, toolArgs.includeHidden);
+      return results.length > 0 ? `Entries:\n${results.join('\n')}` : "No entries found.";
+    }
+    return "Error: list_files tool not registered.";
+  }
+  if (toolName === "search_files") {
+    if (typeof runtime.searchFiles === 'function') {
+      const results = await runtime.searchFiles(toolArgs.pattern);
+      return results.length > 0 ? `Found files:\n${results.join('\n')}` : "No matching files found.";
+    }
+    return "Error: search_files tool not registered.";
+  }
+  if (toolName === "search_content") {
+    if (typeof runtime.searchContent === 'function') {
+      const results = await runtime.searchContent(toolArgs.query);
+      return results.length > 0 ? `Found occurrences:\n${results.join('\n')}` : "No matches found.";
+    }
+    return "Error: search_content tool not registered.";
+  }
+  if (toolName === "run_command") {
+    const output = await runtime.runCommand(toolArgs.command, toolArgs.cwd, { reporter, silent: true });
+    if (output && typeof output.logs === 'string') return output.logs || "Command executed with no output.";
+    if (output && (typeof output.stdout === 'string' || typeof output.stderr === 'string')) {
+      const out = (output.stdout || '').trim();
+      const err = (output.stderr || '').trim();
+      if (out && !err) return out;
+      if (!out && err) return err;
+      if (out && err) return `${out}\n${err}`;
+      return `Command exited with code ${output.status ?? 'unknown'}.`;
+    }
+    return "Command executed.";
+  }
+  if (toolName === "websearch") {
+    const { websearch } = await import("../utils/webTools.js");
+    const res = await websearch(toolArgs.query, toolArgs.numResults || 8);
+    if (res.error) return `Error: ${res.error}`;
+    return JSON.stringify(res.results, null, 2);
+  }
+  if (toolName === "webfetch") {
+    const { webfetch } = await import("../utils/webTools.js");
+    const res = await webfetch(toolArgs.url);
+    if (res.error) return `Error: ${res.error}`;
+    return res.content;
+  }
+  return `Tool ${toolName} not supported in batch mode.`;
+}
+
+/**
+ * Build multi-layer system prompt (KiloCode-style)
+ * Layers: soul.txt + provider_prompt(model) + environment() + instructionFiles() + agent_prompt
+ */
+async function buildSystemPrompt(role, modelConfig, extraContext, projectRoot) {
+  const layers = [];
+
+  // Layer 1: Soul (core personality)
+  const soul = loadSoulPrompt();
+  if (soul) layers.push(soul);
+
+  // Layer 2: Provider-specific prompt
+  const providerPrompt = loadProviderPrompt(modelConfig?.model || '');
+  if (providerPrompt) layers.push(providerPrompt);
+
+  // Layer 3: Environment info
+  layers.push(`Environment:\n- Working directory: ${projectRoot || process.cwd()}\n- Platform: ${os.platform()} ${os.release()}\n- OS: ${os.type()}`);
+
+  // Layer 4: Instruction files (AGENTS.md, CLAUDE.md)
+  try {
+    const instructionPrompt = await buildInstructionPrompt(projectRoot || process.cwd());
+    if (instructionPrompt) layers.push(instructionPrompt);
+  } catch (e) {
+    // Skip if instruction loading fails
+  }
+
+  // Layer 5: Agent-specific prompt
+  const agentPrompt = loadPrompt(role, modelConfig || {}, extraContext);
+  if (agentPrompt) layers.push(agentPrompt);
+
+  return layers.join('\n\n---\n\n');
 }
 
 /**
@@ -303,7 +521,8 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
   const role = options.role || "general";
   const reporter = options.reporter || runtime.reporter || null;
   const extraContext = options.extraContext || {};
-  const systemPrompt = loadPrompt(role, runtime.modelConfig || {}, extraContext);
+  const projectRoot = options.projectRoot || process.cwd();
+  const systemPrompt = await buildSystemPrompt(role, runtime.modelConfig || {}, extraContext, projectRoot);
   const activeTools = getToolsForRole(role);
 
   const startTime = Date.now();
@@ -520,6 +739,68 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
             const subResult = await runAgentPipeline(args.task, smartContext, runtime, { role: "explorer", reporter });
             toolResultStr = `Sub-agent completed task.\n\nFinal Report:\n${subResult.finalMessage?.content || "No output"}`;
             emitReporter(reporter, "log", { level: "success", message: "Explorer task finished." });
+          }
+          else if (tc.function.name === "multiedit") {
+            if (role === 'plan') {
+              toolResultStr = `Error: multiedit permission denied in Plan mode.`;
+              statsErrors++;
+            } else {
+              runtime.patchFile(args.path, null, args.edits.map(e => ({ search: e.search, replace: e.replace })), { reporter, silent: true });
+              toolResultStr = `Successfully applied ${args.edits.length} edits to ${args.path}`;
+              statsFilesEdited++;
+            }
+          }
+          else if (tc.function.name === "batch") {
+            const toolCalls = args.tool_calls || [];
+            const results = [];
+            const maxBatch = 25;
+            const limitedCalls = toolCalls.slice(0, maxBatch);
+            
+            for (const call of limitedCalls) {
+              try {
+                const innerResult = await executeToolCall(call.tool, call.parameters, runtime, role, smartContext, reporter);
+                results.push({ tool: call.tool, success: true, result: innerResult });
+              } catch (err) {
+                results.push({ tool: call.tool, success: false, error: err.message });
+              }
+            }
+            
+            const successCount = results.filter(r => r.success).length;
+            toolResultStr = `Batch execution: ${successCount}/${results.length} tools succeeded.\n${results.map(r => r.success ? `✓ ${r.tool}: ${previewToolResult(r.result)}` : `✗ ${r.tool}: ${r.error}`).join('\n')}`;
+          }
+          else if (tc.function.name === "codesearch") {
+            const { codesearch } = await import("../utils/webTools.js");
+            const res = await codesearch(args.query, args.tokensNum || 5000);
+            if (res.error) toolResultStr = `Error: ${res.error}`;
+            else toolResultStr = res.content || JSON.stringify(res, null, 2);
+          }
+          else if (tc.function.name === "todowrite") {
+            try {
+              mkdirSync(KILO_DIR, { recursive: true });
+              const todosPath = join(KILO_DIR, "todos.json");
+              writeFileSync(todosPath, JSON.stringify(args.todos, null, 2));
+              toolResultStr = `Todo list updated with ${args.todos.length} items.`;
+            } catch (err) {
+              toolResultStr = `Error writing todos: ${err.message}`;
+              statsErrors++;
+            }
+          }
+          else if (tc.function.name === "todoread") {
+            try {
+              const todosPath = join(KILO_DIR, "todos.json");
+              if (existsSync(todosPath)) {
+                const todos = JSON.parse(readFileSync(todosPath, 'utf-8'));
+                toolResultStr = JSON.stringify(todos, null, 2);
+              } else {
+                toolResultStr = "No todos found.";
+              }
+            } catch (err) {
+              toolResultStr = `Error reading todos: ${err.message}`;
+              statsErrors++;
+            }
+          }
+          else if (tc.function.name === "codebase_search") {
+            toolResultStr = "codebase_search requires Morph API key. Set MORPH_API_KEY environment variable to enable.";
           } else {
             toolResultStr = `Error: Unknown tool ${tc.function.name}`;
           }

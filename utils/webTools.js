@@ -150,3 +150,65 @@ export async function websearch(query, numResults = 8) {
     return { error: `Web search failure: ${err.message}` };
   }
 }
+
+/**
+ * codesearch: Searches for API, library, and SDK documentation using Exa Code API.
+ */
+export async function codesearch(query, tokensNum = 5000) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    const searchRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "get_code_context_exa",
+        arguments: {
+          query: query,
+          tokensNum: tokensNum
+        }
+      }
+    };
+
+    const response = await globalThis.fetch('https://mcp.exa.ai/mcp', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json, text/event-stream',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(searchRequest),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return { error: `Code search error (${response.status})` };
+    }
+
+    const responseText = await response.text();
+    const lines = responseText.split("\n");
+    
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          const data = JSON.parse(line.substring(6));
+          if (data.result && data.result.content && data.result.content.length > 0) {
+            return { content: data.result.content[0].text };
+          }
+        } catch (e) {
+          // Skip malformed JSON lines
+        }
+      }
+    }
+
+    return { content: "No code snippets or documentation found. Please try a different query." };
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return { error: 'Code search request timed out after 30 seconds.' };
+    }
+    return { error: `Code search failure: ${err.message}` };
+  }
+}
