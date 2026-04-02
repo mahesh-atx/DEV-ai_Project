@@ -33,6 +33,8 @@ const COLORS = {
   highlight: '#27272A' // Used for expanded blocks background
 };
 
+const SPINNER_FRAMES = ['|', '/', '-', '\\'];
+
 function stripAnsi(text) {
   return String(text || '').replace(/\u001b\[[0-9;]*m/g, '');
 }
@@ -249,6 +251,16 @@ function isTopLevelActivity(entry) {
   return entry?.kind === 'tool' || entry?.kind === 'command' || entry?.kind === 'chat';
 }
 
+function findLatestLiveToolEntryId(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i]?.kind === 'tool' || entries[i]?.kind === 'command') {
+      return entries[i].id;
+    }
+  }
+
+  return null;
+}
+
 function findLatestCollapsibleId(currentActivity, messageList) {
   for (let i = currentActivity.length - 1; i >= 0; i--) {
     if (currentActivity[i]?.metadata?.isCollapsible) {
@@ -359,6 +371,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
   const [streamLabel, setStreamLabel] = useState('Waiting for input');
   const [streamResponseContent, setStreamResponseContent] = useState('');
   const [activityLog, setActivityLog] = useState([]);
+  const [liveTick, setLiveTick] = useState(0);
 
   const [pendingQuestion, setPendingQuestion] = useState(null);
   const questionResolverRef = useRef(null);
@@ -399,6 +412,19 @@ const ChatScreen = ({ mode, model, onExit }) => {
     const timer = setInterval(() => {
       setElapsedTime(prev => prev + 1);
     }, 1000);
+    return () => clearInterval(timer);
+  }, [isThinking]);
+
+  useEffect(() => {
+    if (!isThinking) {
+      setLiveTick(0);
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setLiveTick((previous) => previous + 1);
+    }, 100);
+
     return () => clearInterval(timer);
   }, [isThinking]);
 
@@ -1128,7 +1154,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     return items;
   }, [history]);
 
-  const renderActivityEntry = (entry, linesArray, maxW) => {
+  const renderActivityEntry = (entry, linesArray, maxW, liveRenderState = {}) => {
       // INTERLEAVING RENDERER: Renders pure conversational text elegantly inline
       if (entry.kind === 'chat') {
           let inCodeBlock = false;
@@ -1147,6 +1173,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
       const isSub = entry.kind === 'status' || entry.kind === 'success' || entry.kind === 'error';
       const isTool = entry.kind === 'tool' || entry.kind === 'command';
       const isExpanded = expandedBlocks.has(entry.id);
+      const isActiveTool = isTool && liveRenderState.activeToolEntryId === entry.id;
       const icon = isSub ? '  └ ' : '● ';
       
       let mainText = entry.text;
@@ -1161,6 +1188,23 @@ const ChatScreen = ({ mode, model, onExit }) => {
               if (isTool) {
                   const rawText = l.slice(2);
                   const match = rawText.match(/^([A-Za-z0-9_]+)\((.*)\)$/);
+                  const toolIcon = isActiveTool
+                    ? { text: `${liveRenderState.spinnerFrame || '*'} `, color: COLORS.orange }
+                    : null;
+                  if (isActiveTool) {
+                      if (match) {
+                          linesArray.push({ segments: [
+                              toolIcon,
+                              { text: match[1], bold: true, color: COLORS.white },
+                              { text: '(', color: COLORS.dim },
+                              { text: match[2], color: COLORS.dim },
+                              { text: ')', color: COLORS.dim }
+                          ]});
+                      } else {
+                          linesArray.push({ segments: [toolIcon, { text: rawText, bold: true, color: COLORS.white }] });
+                      }
+                      return;
+                  }
                   if (match) {
                       linesArray.push({ segments: [
                           { text: '● ', color: COLORS.green },
@@ -1221,7 +1265,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
       }
   };
 
-  const renderActivityClusters = (entries, linesArray, maxW) => {
+  const renderActivityClusters = (entries, linesArray, maxW, liveRenderState = {}) => {
       if (!entries || entries.length === 0) return;
 
       const clusters = [];
@@ -1242,9 +1286,15 @@ const ChatScreen = ({ mode, model, onExit }) => {
 
       clusters.forEach((cluster, index) => {
           if (index > 0) ensureSpacer(linesArray);
-          cluster.forEach((entry) => renderActivityEntry(entry, linesArray, maxW));
+          cluster.forEach((entry) => renderActivityEntry(entry, linesArray, maxW, liveRenderState));
       });
   };
+
+  const spinnerFrame = SPINNER_FRAMES[liveTick % SPINNER_FRAMES.length];
+  const showStreamingCursor = liveTick % 2 === 0;
+  const activeToolEntryId = useMemo(() => (
+    isThinking ? findLatestLiveToolEntryId(activityLog) : null
+  ), [activityLog, isThinking]);
 
   const maxLineWidth = Math.max(20, dims.columns - 4);
   const allLines = useMemo(() => {
@@ -1315,7 +1365,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
     });
 
     if (isThinking) {
-       renderActivityClusters(activityLog, lines, maxLineWidth);
+       renderActivityClusters(activityLog, lines, maxLineWidth, { activeToolEntryId, spinnerFrame });
 
        if (streamResponseContent) {
            lines.push({ segments: [], empty: true });
@@ -1333,15 +1383,21 @@ const ChatScreen = ({ mode, model, onExit }) => {
                } else {
                    lines.push({ segments: [{ text: '  ' }, { text: wl.text, color: wl.color }] });
                }
-           });
-       }
+            });
+            if (wrappedLines.length > 0 && lines.length > 0) {
+                const lastStreamingLine = lines[lines.length - 1];
+                if (lastStreamingLine?.segments) {
+                    lastStreamingLine.segments.push({ text: showStreamingCursor ? '▋' : ' ', color: COLORS.dim });
+                }
+            }
+        }
     }
 
     while (lines.length > 0 && lines[lines.length - 1].empty) {
         lines.pop();
     }
     return lines;
-  }, [messages, isThinking, activityLog, streamResponseContent, maxLineWidth, expandedBlocks]);
+  }, [messages, isThinking, activityLog, streamResponseContent, maxLineWidth, expandedBlocks, activeToolEntryId, showStreamingCursor, spinnerFrame]);
 
   let uiReservedLines = 4; 
   if (isThinking) uiReservedLines += 2;
@@ -1413,7 +1469,7 @@ const ChatScreen = ({ mode, model, onExit }) => {
       {/* Live Status Tracker */}
       {isThinking && (
         <Box flexDirection="row" paddingX={1} marginBottom={1} marginTop={1}>
-           <Text color={COLORS.orange}>* {streamLabel}... </Text>
+           <Text color={COLORS.orange}>{spinnerFrame} {streamLabel}... </Text>
            <Text color={COLORS.dim}>({elapsedTime}s · esc to interrupt)</Text>
         </Box>
       )}
