@@ -9,8 +9,9 @@ import { loadPrompt } from "../prompts/promptLoader.js";
 import { loadToolPrompt } from "../tools/loader.js";
 import { loadSoulPrompt, loadProviderPrompt } from "../prompts/systemPrompt.js";
 import { buildInstructionPrompt } from "../prompts/instructionLoader.js";
+import { getTodoCounts, readTodoList, writeTodoList } from "../utils/todoStore.js";
 import os from "os";
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -164,6 +165,8 @@ IMPORTANT RULES:
 - Prefer native file tools for exploration. Use 'list_files', 'search_files', 'search_content', and 'read_file' before reaching for shell commands.
 - Prefer the 'cwd' argument on run_command for subdirectories instead of trying to use 'cd'.
 - If a command fails, use the error output to fix your approach.
+- User-facing responses must be terminal-friendly plain text. Do not emit <think> blocks, markdown tables, or decorative emphasis like '**bold**'.
+- Prefer short headings and simple '-' lists so the TUI can colorize and wrap them cleanly.
 ${OS_INFO}
 `;
 
@@ -172,7 +175,7 @@ export const PROMPTS = {
   explorer: `You are an Expert Codebase Explorer.\nYour goal is to aggressively search the codebase, read files, and output a detailed context architecture report. You cannot edit code.\n${BASE_RULES}`,
   coder: `You are an Elite Implementation Coder.\nYour goal is to execute specific file creations and edits cleanly based on the orchestrator's plan. You should not test code.\n${BASE_RULES}`,
   debugger: `You are a strict QA and Verification Debugger.\nYour goal is to run terminal tests, compile the codebase, analyze errors, and verify the work. You do not edit code.\n${BASE_RULES}`,
-  plan: `You are a Lead AI Systems Architect meticulously operating in Plan Mode.\nYour objective is exclusively to explore the codebase and produce a comprehensive plan.\nYou operate in a strict read-only execution environment. You MUST NOT edit source code files or run terminal shell commands.\n\nYour 4-Phase Planning Workflow:\n1. Initial Understanding: Explore the codebase natively using list_files, search_files, search_content, and read_file.\n2. Design: Formulate a solution architecture.\n3. Review: Verify architectural feasibility.\n4. Final Plan: Respond with the complete plan as your text response (markdown format). The system will automatically save it to a .md file. Then call 'plan_exit' to signal completion.\n\nIMPORTANT: Do NOT use write_file to create the plan. Simply respond with the full plan text as your message content. The system handles file saving automatically.\n${BASE_RULES}`
+  plan: `You are a Lead AI Systems Architect meticulously operating in Plan Mode.\nYour objective is exclusively to explore the codebase and produce a comprehensive plan.\nYou operate in a strict read-only execution environment. You MUST NOT edit source code files or run terminal shell commands.\n\nYour 4-Phase Planning Workflow:\n1. Initial Understanding: Explore the codebase natively using list_files, search_files, search_content, and read_file.\n2. Design: Formulate a solution architecture.\n3. Review: Verify architectural feasibility.\n4. Final Plan: Respond with the complete plan as plain structured terminal text. Use short headings and simple '-' lists. Do not use markdown tables, '**' emphasis, or code fences. The system will automatically save it to a .md file. Then call 'plan_exit' to signal completion.\n\nIMPORTANT: Do NOT use write_file to create the plan. Simply respond with the full plan text as your message content. The system handles file saving automatically.\n${BASE_RULES}`
 };
 
 const TOOLS_SCHEMA = [
@@ -695,14 +698,17 @@ TOOLS_SCHEMA.push(
   }
 );
 
-function getToolsForRole(role) {
+function getToolsForRole(role, options = {}) {
+  const allowTodoTools = options.allowTodoTools !== false;
   const universal = ["ask_user", "delegate_task"];
-  if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", "codesearch", "codebase_search", "todoread", "todowrite", "read", "glob", "grep", "list", "question", "lsp", ...universal].includes(t.function.name));
-  if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "multiedit", "read_file", "finish_task", "todoread", "todowrite", "read", "write", "edit", "question", "lsp", ...universal].includes(t.function.name));
-  if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", "todoread", "todowrite", "bash", "read", "question", ...universal].includes(t.function.name));
+  const todoTools = allowTodoTools ? ["todoread", "todowrite"] : [];
+
+  if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", "codesearch", "codebase_search", "read", "glob", "grep", "list", "question", "lsp", ...todoTools, ...universal].includes(t.function.name));
+  if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "multiedit", "read_file", "finish_task", "read", "write", "edit", "question", "lsp", ...todoTools, ...universal].includes(t.function.name));
+  if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", "bash", "read", "question", ...todoTools, ...universal].includes(t.function.name));
   if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", "read", "glob", "grep", "list", "question", ...universal].includes(t.function.name));
-  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "todoread", "todowrite", "bash", "read", "glob", "grep", "list", "question"].includes(t.function.name));
-  return TOOLS_SCHEMA.filter(t => t.function.name !== 'task');
+  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "bash", "read", "glob", "grep", "list", "question", ...todoTools].includes(t.function.name));
+  return TOOLS_SCHEMA.filter(t => t.function.name !== 'task' && (allowTodoTools || !["todowrite", "todoread"].includes(t.function.name)));
 }
 
 /**
@@ -711,6 +717,10 @@ function getToolsForRole(role) {
 async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, reporter) {
   const normalizedToolName = normalizeToolName(toolName);
   const normalizedArgs = normalizeToolArgs(toolName, toolArgs);
+
+  if ((normalizedToolName === "todowrite" || normalizedToolName === "todoread") && runtime.allowTodoTools === false) {
+    return "Error: todo tools are only available to the main agent.";
+  }
 
   if (normalizedToolName === "read_file") {
     const content = runtime.readFile(normalizedArgs.path);
@@ -791,6 +801,12 @@ async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, 
     }
     return "Error: lsp tool not registered.";
   }
+  if (normalizedToolName === "todowrite") {
+    return JSON.stringify(writeTodoList(runtime.projectRoot || process.cwd(), normalizedArgs.todos), null, 2);
+  }
+  if (normalizedToolName === "todoread") {
+    return JSON.stringify(readTodoList(runtime.projectRoot || process.cwd()), null, 2);
+  }
   return `Tool ${toolName} not supported in batch mode.`;
 }
 
@@ -832,11 +848,13 @@ async function buildSystemPrompt(role, modelConfig, extraContext, projectRoot) {
  */
 export async function runAgentPipeline(userInput, smartContext, runtime, options = {}) {
   const role = options.role || "general";
+  const allowTodoTools = options.allowTodoTools !== false;
   const reporter = options.reporter || runtime.reporter || null;
   const extraContext = options.extraContext || {};
   const projectRoot = options.projectRoot || process.cwd();
   const systemPrompt = await buildSystemPrompt(role, runtime.modelConfig || {}, extraContext, projectRoot);
-  const activeTools = getToolsForRole(role);
+  const activeTools = getToolsForRole(role, { allowTodoTools });
+  const batchRuntime = { ...runtime, allowTodoTools, projectRoot };
 
   const startTime = Date.now();
   const phase = role === 'general' ? 'building' : role === 'explorer' ? 'exploring' : role === 'debugger' ? 'debugging' : 'coding';
@@ -1089,7 +1107,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
                `[ORCHESTRATOR DELEGATION]: ${args.description}\n\nTask Prompt:\n${args.prompt}`, 
                smartContext, 
                runtime, 
-               { role: args.subagent_type || "coder", reporter }
+               { role: args.subagent_type || "coder", reporter, allowTodoTools: false }
             );
             
             toolResultStr = `<task_result task_id="${args.task_id || ''}">\n\nSub-Agent Completed.\nFinal Output:\n${subResult.finalMessage?.content || "No output"}\n\n</task_result>`;
@@ -1097,7 +1115,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           }
           else if (tc.function.name === "delegate_task") {
             emitReporter(reporter, "log", { level: "info", message: "Delegating explorer task..." });
-            const subResult = await runAgentPipeline(args.task, smartContext, runtime, { role: "explorer", reporter });
+            const subResult = await runAgentPipeline(args.task, smartContext, runtime, { role: "explorer", reporter, allowTodoTools: false });
             toolResultStr = `Sub-agent completed task.\n\nFinal Report:\n${subResult.finalMessage?.content || "No output"}`;
             emitReporter(reporter, "log", { level: "success", message: "Explorer task finished." });
           }
@@ -1194,7 +1212,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
             
             for (const call of limitedCalls) {
               try {
-                const innerResult = await executeToolCall(call.tool, call.parameters, runtime, role, smartContext, reporter);
+                const innerResult = await executeToolCall(call.tool, call.parameters, batchRuntime, role, smartContext, reporter);
                 results.push({ tool: call.tool, success: true, result: innerResult });
               } catch (err) {
                 results.push({ tool: call.tool, success: false, error: err.message });
@@ -1211,28 +1229,35 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
             else toolResultStr = res.content || JSON.stringify(res, null, 2);
           }
           else if (tc.function.name === "todowrite") {
-            try {
-              mkdirSync(KILO_DIR, { recursive: true });
-              const todosPath = join(KILO_DIR, "todos.json");
-              writeFileSync(todosPath, JSON.stringify(args.todos, null, 2));
-              toolResultStr = `Todo list updated with ${args.todos.length} items.`;
-            } catch (err) {
-              toolResultStr = `Error writing todos: ${err.message}`;
+            if (!allowTodoTools) {
+              toolResultStr = "Error: todo tools are only available to the main agent.";
               statsErrors++;
+            } else {
+              try {
+                const todos = writeTodoList(projectRoot, args.todos);
+                const counts = getTodoCounts(todos);
+                toolResultStr = JSON.stringify(todos, null, 2);
+                emitReporter(reporter, "log", {
+                  level: "info",
+                  message: `Todo list updated: ${counts.total} total, ${counts.pending + counts.in_progress} open`
+                });
+              } catch (err) {
+                toolResultStr = `Error writing todos: ${err.message}`;
+                statsErrors++;
+              }
             }
           }
           else if (tc.function.name === "todoread") {
-            try {
-              const todosPath = join(KILO_DIR, "todos.json");
-              if (existsSync(todosPath)) {
-                const todos = JSON.parse(readFileSync(todosPath, 'utf-8'));
-                toolResultStr = JSON.stringify(todos, null, 2);
-              } else {
-                toolResultStr = "No todos found.";
-              }
-            } catch (err) {
-              toolResultStr = `Error reading todos: ${err.message}`;
+            if (!allowTodoTools) {
+              toolResultStr = "Error: todo tools are only available to the main agent.";
               statsErrors++;
+            } else {
+              try {
+                toolResultStr = JSON.stringify(readTodoList(projectRoot), null, 2);
+              } catch (err) {
+                toolResultStr = `Error reading todos: ${err.message}`;
+                statsErrors++;
+              }
             }
           }
           else if (tc.function.name === "codebase_search") {

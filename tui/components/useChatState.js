@@ -4,6 +4,7 @@ import { MODES } from '../constants.js';
 import { createTuiReporter } from '../uiReporter.js';
 import { createClient } from '../../config/apiClient.js';
 import { estimateTokens, getSafeMaxTokens } from '../../utils/budgeting.js';
+import { normalizeTodoList } from '../../utils/todoStore.js';
 import {
   DEFAULT_SUMMARY,
   truncate,
@@ -319,6 +320,22 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
     setActivityLog([...currentActivityRef.current]);
   }, []);
 
+  const updateLastActivity = useCallback((matcher, updater) => {
+    const nextActivity = [...currentActivityRef.current];
+
+    for (let index = nextActivity.length - 1; index >= 0; index -= 1) {
+      const entry = nextActivity[index];
+      if (!matcher(entry)) continue;
+
+      nextActivity[index] = updater(entry);
+      currentActivityRef.current = nextActivity;
+      setActivityLog([...nextActivity]);
+      return true;
+    }
+
+    return false;
+  }, []);
+
   const resolvePendingQuestionAnswer = useCallback((answer) => {
     pushActivity('success', `Answer: ${answer}`);
 
@@ -594,9 +611,51 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
       const phaseLabel = getToolPhaseLabel(toolName);
       activeToolPhaseRef.current = phaseLabel;
       setStreamLabel(phaseLabel);
-      pushActivity('tool', `${displayTool}(${truncate(cleanArgs, 50)})`);
+      const activityText = cleanArgs ? `${displayTool}(${truncate(cleanArgs, 50)})` : displayTool;
+      const todoItems = toolName === 'todowrite' ? normalizeTodoList(argsObject?.todos) : null;
+      const metadata = toolName === 'todowrite' || toolName === 'todoread'
+        ? { toolName, todoItems }
+        : null;
+      pushActivity('tool', activityText, metadata);
     },
     toolResult: ({ toolName, text, fullText, isCollapsible, args }) => {
+      if (toolName === 'todowrite' || toolName === 'todoread') {
+        const value = String(fullText || '');
+        if (/^Error[:\s]/i.test(value)) {
+          pushActivity('error', value);
+          return;
+        }
+
+        let todoItems = [];
+        try {
+          todoItems = normalizeTodoList(JSON.parse(value || '[]'));
+        } catch {
+          todoItems = [];
+        }
+
+        const updated = updateLastActivity(
+          (entry) => entry.kind === 'tool' && entry.metadata?.toolName === toolName,
+          (entry) => ({
+            ...entry,
+            metadata: {
+              ...(entry.metadata || {}),
+              toolName,
+              todoItems,
+              todoVariant: toolName === 'todoread' ? 'read' : 'write',
+            },
+          })
+        );
+
+        if (!updated) {
+          pushActivity('status', toolName === 'todoread' ? `Read ${todoItems.length} todos` : `Updated ${todoItems.length} todos`, {
+            toolName,
+            todoItems,
+            todoVariant: toolName === 'todoread' ? 'read' : 'write',
+          });
+        }
+        return;
+      }
+
       const inlineDetails = shouldInlineToolDetails(toolName);
       const detailText = inlineDetails
         ? buildInlineToolDetailText(toolName, text, fullText, args)
@@ -649,7 +708,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
         questionResolverRef.current = resolve;
       });
     },
-  }), [pushActivity, updateSummary, nextId]);
+  }), [pushActivity, updateLastActivity, updateSummary, nextId]);
 
   const runAskMode = useCallback(async (query, msgHistory) => {
     const client = clientRef.current;
