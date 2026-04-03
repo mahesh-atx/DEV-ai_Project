@@ -147,6 +147,13 @@ export function buildToolNarration(toolCall) {
     case 'ask_user':
       return `Before I proceed further, I need a quick clarification. This will help me avoid incorrect assumptions and ensure that the solution I provide is exactly aligned with your expectations.`;
 
+    case 'send_user_message':
+    case 'brief':
+      return `I'm sending you a direct update in the transcript so you can see an important finding or progress note right away without interrupting the run.`;
+
+    case 'structured_output':
+      return `I'm returning this result as structured data so it stays stable, easy to inspect, and easier for the interface to render clearly.`;
+
     case 'delegate_task':
     case 'task':
       return `To handle this more efficiently, I'm delegating a focused subtask that will gather the missing context or process a specific part of the problem. This allows me to move faster while keeping the overall solution accurate.`;
@@ -198,6 +205,8 @@ export function getToolDisplayName(toolName) {
   if (toolName === 'search_files') return 'Search';
   if (toolName === 'search_content') return 'Grep';
   if (toolName === 'ask_user') return 'Ask';
+  if (toolName === 'send_user_message' || toolName === 'brief') return 'Message';
+  if (toolName === 'structured_output') return 'Output';
   if (toolName === 'todowrite') return 'Update Todos';
   if (toolName === 'todoread') return 'Read Todos';
   if (toolName === 'finish_task') return 'Task';
@@ -241,6 +250,11 @@ export function getToolPhaseLabel(toolName) {
     case 'question':
     case 'ask_user':
       return 'Waiting for input';
+    case 'send_user_message':
+    case 'brief':
+      return 'Sending message';
+    case 'structured_output':
+      return 'Building structured output';
     case 'delegate_task':
     case 'task':
       return 'Delegating work';
@@ -271,6 +285,7 @@ export function shouldInlineToolDetails(toolName) {
     case 'search_content':
     case 'webfetch':
     case 'lsp':
+    case 'structured_output':
       return true;
     default:
       return false;
@@ -309,6 +324,16 @@ export function buildInlineToolDetailText(toolName, text, fullText, args = {}, m
     const lines = value.split('\n');
     const entries = lines[0] === 'Found files:' ? lines.slice(1) : lines;
     return buildInlineDetailText(entries.join('\n'), maxLines);
+  }
+
+  if (toolName === 'structured_output') {
+    try {
+      const parsed = JSON.parse(String(fullText || '{}'));
+      const payload = parsed?.structured_output ?? parsed;
+      return buildInlineDetailText(JSON.stringify(payload, null, 2), maxLines);
+    } catch {
+      return buildInlineDetailText(fullText, maxLines);
+    }
   }
 
   return buildInlineDetailText(fullText, maxLines);
@@ -351,6 +376,13 @@ export function formatToolArgs(toolName, rawArgs, argsObject) {
     case 'question':
     case 'ask_user':
       return 'Clarification';
+    case 'send_user_message':
+    case 'brief':
+      return pick(parsed.message, 'message');
+    case 'structured_output': {
+      const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed) : [];
+      return keys.length > 0 ? keys.slice(0, 3).join(', ') : 'payload';
+    }
     case 'finish_task':
       return pick(parsed.message, 'done');
     case 'lsp':

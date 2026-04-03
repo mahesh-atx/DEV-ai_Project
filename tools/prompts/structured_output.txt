@@ -1,0 +1,11 @@
+Use this tool to return structured machine-readable output.
+
+Behavior:
+- Pass a JSON object as the tool input
+- Any keys are allowed
+- Use this when the result should be consumed as structured data instead of plain prose
+
+Good uses:
+- summaries with stable fields
+- reports, audits, metrics, and inventories
+- outputs that may be parsed or rendered specially by the interface

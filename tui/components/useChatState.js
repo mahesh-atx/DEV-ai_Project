@@ -372,10 +372,6 @@ export function useChatState({
     updateSessionMeta(currentSessionId, smartTitle);
   }, [currentSessionId, currentSessionTitle, messages, sessionReady, updateSessionMeta]);
 
-  const shouldCaptureGlobalInput = Boolean(
-    pendingQuestion || pickerState || showQuestions || showShortcuts || isThinking
-  );
-
   const toggleLatestCollapsible = useCallback(() => {
     const targetId = visibleCollapsibleIdRef.current || findLatestCollapsibleId(currentActivityRef.current, messages);
     if (!targetId) return false;
@@ -523,7 +519,7 @@ export function useChatState({
         }
       }
     }
-  }, { isActive: shouldCaptureGlobalInput });
+  });
 
   const nextId = useCallback(() => {
     msgIdCounter.current += 1;
@@ -846,6 +842,12 @@ export function useChatState({
       if (status === 'error') pushActivity('error', text || 'Phase failed');
     },
     toolExecution: ({ toolName, args, argsObject }) => {
+      if (toolName === 'send_user_message' || toolName === 'brief') {
+        const phaseLabel = getToolPhaseLabel(toolName);
+        activeToolPhaseRef.current = phaseLabel;
+        setStreamLabel(phaseLabel);
+        return;
+      }
       const displayTool = getToolDisplayName(toolName);
       const cleanArgs = formatToolArgs(toolName, args, argsObject);
       const phaseLabel = getToolPhaseLabel(toolName);
@@ -944,6 +946,14 @@ export function useChatState({
       options: options || [],
       title: title || 'Action Required',
     }),
+    userMessage: ({ message, status, attachments = [], sentAt }) => {
+      pushActivity('status', message, {
+        isUserMessage: true,
+        status,
+        attachments,
+        sentAt,
+      });
+    },
   }), [pushActivity, updateLastActivity, updateSummary, nextId, promptUserSelection]);
 
   const runAskMode = useCallback(async (query, msgHistory) => {

@@ -1,0 +1,14 @@
+Use this tool to proactively send a message to the user without pausing execution.
+
+Use it when you want to:
+- share an important update mid-task
+- call attention to findings that matter right now
+- attach relevant files for the user to inspect
+
+Behavior:
+- This tool does not block the run
+- `status` must be either `normal` or `proactive`
+- `message` must be non-empty
+- `attachments` should be valid file paths relative to the project root or absolute paths
+
+Keep the message short, concrete, and useful.

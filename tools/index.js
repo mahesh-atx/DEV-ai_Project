@@ -9,6 +9,7 @@ export const TOOL_NAME_ALIASES = {
   glob: 'search_files',
   grep: 'search_content',
   question: 'ask_user',
+  brief: 'send_user_message',
 };
 
 const TOOL_DEFINITIONS = {
@@ -240,6 +241,50 @@ const TOOL_DEFINITIONS = {
     required: ['questions'],
     roles: ['general', 'explorer', 'coder', 'debugger', 'orchestrator', 'plan'],
   },
+  send_user_message: {
+    promptKey: 'send_user_message',
+    parameters: {
+      message: { type: 'string', description: 'The message to send to the user' },
+      attachments: {
+        type: 'array',
+        description: 'Optional file paths to attach to the message',
+        items: { type: 'string', description: 'File path to attach' },
+      },
+      status: {
+        type: 'string',
+        description: 'Message priority level',
+        enum: ['normal', 'proactive'],
+      },
+    },
+    required: ['message', 'status'],
+    roles: ['general', 'explorer', 'coder', 'debugger', 'orchestrator', 'plan'],
+  },
+  brief: {
+    promptKey: 'send_user_message',
+    parameters: {
+      message: { type: 'string', description: 'The message to send to the user' },
+      attachments: {
+        type: 'array',
+        description: 'Optional file paths to attach to the message',
+        items: { type: 'string', description: 'File path to attach' },
+      },
+      status: {
+        type: 'string',
+        description: 'Message priority level',
+        enum: ['normal', 'proactive'],
+      },
+    },
+    required: ['message', 'status'],
+    roles: ['general', 'explorer', 'coder', 'debugger', 'orchestrator', 'plan'],
+  },
+  structured_output: {
+    promptKey: 'structured_output',
+    parameterSchema: {
+      type: 'object',
+      additionalProperties: true,
+    },
+    roles: ['general', 'explorer', 'coder', 'debugger', 'orchestrator', 'plan'],
+  },
   delegate_task: {
     description: 'Delegate a pure exploration or read task to a sub-agent.',
     parameters: {
@@ -404,18 +449,20 @@ function buildSchemaType(paramDef) {
 }
 
 function buildToolSchema(id, definition) {
+  const parameterSchema = definition.parameterSchema || {
+    type: 'object',
+    properties: Object.fromEntries(
+      Object.entries(definition.parameters || {}).map(([paramName, paramDef]) => [paramName, buildSchemaType(paramDef)])
+    ),
+    required: definition.required || [],
+  };
+
   return {
     type: 'function',
     function: {
       name: id,
       description: resolveToolDescription(definition),
-      parameters: {
-        type: 'object',
-        properties: Object.fromEntries(
-          Object.entries(definition.parameters || {}).map(([paramName, paramDef]) => [paramName, buildSchemaType(paramDef)])
-        ),
-        required: definition.required || [],
-      },
+      parameters: parameterSchema,
     },
   };
 }

@@ -29,7 +29,7 @@ export function loadAllToolPrompts() {
     'glob', 'grep', 'list', 'task', 'question',
     'webfetch', 'websearch', 'apply_patch', 'batch',
     'codesearch', 'todowrite', 'todoread', 'plan_exit',
-    'codebase_search', 'lsp'
+    'codebase_search', 'lsp', 'send_user_message', 'structured_output'
   ];
 
   for (const name of toolNames) {

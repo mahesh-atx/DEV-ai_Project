@@ -39,6 +39,9 @@ export function createTuiReporter(handlers = {}) {
     askUser(payload) {
       return callHandler(handlers, 'askUser', payload);
     },
+    userMessage(payload) {
+      callHandler(handlers, 'userMessage', payload);
+    },
   };
 }
 

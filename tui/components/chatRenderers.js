@@ -20,6 +20,43 @@ export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {
         return;
     }
 
+    if (entry.metadata?.isUserMessage) {
+        const statusColor = entry.metadata.status === 'proactive' ? COLORS.orange : COLORS.blue;
+        const prefix = entry.metadata.status === 'proactive' ? '  ! ' : '  i ';
+
+        wrapText(`${prefix}${entry.text}`, maxW).forEach((lineText, lineIndex) => {
+            if (lineIndex === 0) {
+                linesArray.push({
+                    segments: [
+                        { text: prefix, color: statusColor, bold: true },
+                        { text: lineText.slice(prefix.length), color: statusColor }
+                    ]
+                });
+            } else {
+                linesArray.push({
+                    segments: [
+                        { text: '    ', color: COLORS.dim },
+                        { text: lineText.trimStart(), color: statusColor }
+                    ]
+                });
+            }
+        });
+
+        const attachments = Array.isArray(entry.metadata.attachments) ? entry.metadata.attachments : [];
+        attachments.forEach((attachment) => {
+            const attachmentText = `${attachment.path} (${attachment.size} bytes${attachment.is_image ? ', image' : ''})`;
+            wrapText(attachmentText, Math.max(12, maxW - 6)).forEach((lineText, lineIndex) => {
+                linesArray.push({
+                    segments: [
+                        { text: lineIndex === 0 ? '    + ' : '      ', color: COLORS.dim },
+                        { text: lineText, color: COLORS.dim }
+                    ]
+                });
+            });
+        });
+        return;
+    }
+
     const isSub = entry.kind === 'status' || entry.kind === 'success' || entry.kind === 'error';
     const isTool = entry.kind === 'tool' || entry.kind === 'command';
     const isExpanded = expandedBlocks.has(entry.id);

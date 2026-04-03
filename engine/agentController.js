@@ -11,8 +11,8 @@ import { loadSoulPrompt, loadProviderPrompt } from "../prompts/systemPrompt.js";
 import { buildInstructionPrompt } from "../prompts/instructionLoader.js";
 import { getTodoCounts, readTodoList, writeTodoList } from "../utils/todoStore.js";
 import os from "os";
-import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { readFileSync, existsSync, statSync, realpathSync } from "fs";
+import { join, dirname, extname, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -63,6 +63,7 @@ const TOOL_NAME_ALIASES = {
   glob: "search_files",
   grep: "search_content",
   question: "ask_user",
+  brief: "send_user_message",
 };
 
 function normalizeToolName(toolName) {
@@ -114,6 +115,59 @@ function countSectionItems(result, prefix) {
   return rest.split("\n").filter(Boolean).length;
 }
 
+function isImageAttachmentPath(filePath) {
+  return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extname(filePath).toLowerCase());
+}
+
+function resolveAttachment(projectRoot, attachmentPath) {
+  const rawPath = String(attachmentPath || "").trim();
+  if (!rawPath) {
+    throw new Error("attachment paths must not be empty");
+  }
+
+  const resolvedPath = realpathSync(resolve(projectRoot || process.cwd(), rawPath));
+  const metadata = statSync(resolvedPath);
+
+  return {
+    path: resolvedPath,
+    size: metadata.size,
+    is_image: isImageAttachmentPath(resolvedPath),
+  };
+}
+
+function executeSendUserMessage(args = {}, projectRoot, reporter) {
+  const message = String(args.message || "").trim();
+  if (!message) {
+    throw new Error("message must not be empty");
+  }
+
+  const status = args.status === "proactive" ? "proactive" : "normal";
+  const attachments = Array.isArray(args.attachments)
+    ? args.attachments.map((attachmentPath) => resolveAttachment(projectRoot, attachmentPath))
+    : [];
+  const sentAt = new Date().toISOString();
+
+  emitReporter(reporter, "userMessage", {
+    message,
+    status,
+    attachments,
+    sentAt,
+  });
+
+  return {
+    message,
+    attachments: attachments.length > 0 ? attachments : null,
+    sent_at: sentAt,
+  };
+}
+
+function executeStructuredOutput(args = {}) {
+  return {
+    data: "Structured output provided successfully",
+    structured_output: (args && typeof args === "object" && !Array.isArray(args)) ? args : {},
+  };
+}
+
 function summarizeToolResult(toolName, toolResult, args = {}) {
   const resultText = String(toolResult || "");
 
@@ -148,6 +202,15 @@ function summarizeToolResult(toolName, toolResult, args = {}) {
       return `Found ${matchCount} matching occurrence${matchCount === 1 ? "" : "s"}`;
     }
     return previewToolResult(resultText);
+  }
+
+  if (toolName === "send_user_message") {
+    return `Sent ${args.status === "proactive" ? "proactive" : "normal"} message to user`;
+  }
+
+  if (toolName === "structured_output") {
+    const keyCount = args && typeof args === "object" ? Object.keys(args).length : 0;
+    return `Structured output (${keyCount} key${keyCount === 1 ? "" : "s"})`;
   }
 
   return previewToolResult(resultText);
@@ -519,6 +582,42 @@ const TOOLS_SCHEMA = [
         additionalProperties: false
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_user_message",
+      description: "Send a message to the user without blocking execution.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "The message to send to the user." },
+          attachments: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional attachment file paths."
+          },
+          status: {
+            type: "string",
+            enum: ["normal", "proactive"],
+            description: "Message priority level."
+          }
+        },
+        required: ["message", "status"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "structured_output",
+      description: "Return structured machine-readable output.",
+      parameters: {
+        type: "object",
+        additionalProperties: true
+      }
+    }
   }
 ];
 
@@ -681,6 +780,31 @@ TOOLS_SCHEMA.push(
   {
     type: "function",
     function: {
+      name: "brief",
+      description: "Send a message to the user without blocking execution.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "The message to send to the user." },
+          attachments: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional attachment file paths."
+          },
+          status: {
+            type: "string",
+            enum: ["normal", "proactive"],
+            description: "Message priority level."
+          }
+        },
+        required: ["message", "status"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "lsp",
       description: "Use lightweight workspace-backed language intelligence.",
       parameters: {
@@ -700,14 +824,14 @@ TOOLS_SCHEMA.push(
 
 function getToolsForRole(role, options = {}) {
   const allowTodoTools = options.allowTodoTools !== false;
-  const universal = ["ask_user", "delegate_task"];
+  const universal = ["ask_user", "delegate_task", "send_user_message", "structured_output", "brief"];
   const todoTools = allowTodoTools ? ["todoread", "todowrite"] : [];
 
   if (role === 'explorer') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "finish_task", "codesearch", "codebase_search", "read", "glob", "grep", "list", "question", "lsp", ...todoTools, ...universal].includes(t.function.name));
   if (role === 'coder') return TOOLS_SCHEMA.filter(t => ["write_file", "edit_file", "multiedit", "read_file", "finish_task", "read", "write", "edit", "question", "lsp", ...todoTools, ...universal].includes(t.function.name));
   if (role === 'debugger') return TOOLS_SCHEMA.filter(t => ["run_command", "read_file", "finish_task", "bash", "read", "question", ...todoTools, ...universal].includes(t.function.name));
   if (role === 'plan') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "write_file", "plan_exit", "read", "glob", "grep", "list", "question", ...universal].includes(t.function.name));
-  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "bash", "read", "glob", "grep", "list", "question", ...todoTools].includes(t.function.name));
+  if (role === 'orchestrator') return TOOLS_SCHEMA.filter(t => ["list_files", "search_files", "search_content", "read_file", "run_command", "ask_user", "task", "websearch", "webfetch", "finish_task", "batch", "bash", "read", "glob", "grep", "list", "question", ...todoTools, ...universal].includes(t.function.name));
   return TOOLS_SCHEMA.filter(t => t.function.name !== 'task' && (allowTodoTools || !["todowrite", "todoread"].includes(t.function.name)));
 }
 
@@ -800,6 +924,16 @@ async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, 
       return runtime.lsp(normalizedArgs);
     }
     return "Error: lsp tool not registered.";
+  }
+  if (normalizedToolName === "send_user_message") {
+    return JSON.stringify(
+      executeSendUserMessage(normalizedArgs, runtime.projectRoot || process.cwd(), reporter),
+      null,
+      2
+    );
+  }
+  if (normalizedToolName === "structured_output") {
+    return JSON.stringify(executeStructuredOutput(normalizedArgs), null, 2);
   }
   if (normalizedToolName === "todowrite") {
     return JSON.stringify(writeTodoList(runtime.projectRoot || process.cwd(), normalizedArgs.todos), null, 2);
@@ -943,6 +1077,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
         });
 
         let toolResultStr = "";
+        let skipReporterToolResult = false;
 
         try {
           if (requestedToolName === "question") {
@@ -1087,6 +1222,14 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
               toolResultStr = `Error: ask_user requires a TUI reporter with askUser handler.`;
               statsErrors++;
             }
+          }
+          else if (normalizedToolName === "send_user_message") {
+            const briefResult = executeSendUserMessage(normalizedArgs, projectRoot, reporter);
+            toolResultStr = JSON.stringify(briefResult, null, 2);
+            skipReporterToolResult = true;
+          }
+          else if (normalizedToolName === "structured_output") {
+            toolResultStr = JSON.stringify(executeStructuredOutput(normalizedArgs), null, 2);
           }
           else if (tc.function.name === "websearch") {
             const { websearch } = await import("../utils/webTools.js");
@@ -1271,13 +1414,15 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
           statsErrors++;
         }
 
-        emitReporter(reporter, "toolResult", {
-          toolName: requestedToolName,
-          text: summarizeToolResult(normalizedToolName, toolResultStr, normalizedArgs),
-          fullText: String(toolResultStr || ""),
-          isCollapsible: shouldCollapseToolResult(toolResultStr),
-          args: normalizedArgs,
-        });
+        if (!skipReporterToolResult) {
+          emitReporter(reporter, "toolResult", {
+            toolName: requestedToolName,
+            text: summarizeToolResult(normalizedToolName, toolResultStr, normalizedArgs),
+            fullText: String(toolResultStr || ""),
+            isCollapsible: shouldCollapseToolResult(toolResultStr),
+            args: normalizedArgs,
+          });
+        }
 
         agentMessages.push({
           role: "tool",
