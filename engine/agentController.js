@@ -8,7 +8,7 @@ import { logErrorToFile } from "../utils/errorLog.js";
 import { loadPrompt } from "../prompts/promptLoader.js";
 import { loadToolPrompt } from "../tools/loader.js";
 import { loadSoulPrompt, loadProviderPrompt } from "../prompts/systemPrompt.js";
-import { buildInstructionPrompt } from "../prompts/instructionLoader.js";
+import { buildPromptRuntime } from "./prompt/index.js";
 import { getTodoCounts, readTodoList, writeTodoList } from "../utils/todoStore.js";
 import os from "os";
 import { readFileSync, existsSync, statSync, realpathSync } from "fs";
@@ -538,7 +538,7 @@ const TOOLS_SCHEMA = [
     type: "function",
     function: {
       name: "todowrite",
-      description: "Create and manage a structured task list for the current coding session.",
+      description: "Create and manage a structured task list for the current coding session. Use this at the start of non-trivial tasks, feature builds, or any work with 3 or more meaningful steps.",
       parameters: {
         type: "object",
         properties: {
@@ -564,7 +564,7 @@ const TOOLS_SCHEMA = [
     type: "function",
     function: {
       name: "todoread",
-      description: "Read the current to-do list for the session.",
+      description: "Read the current to-do list for the session so you can continue work against the existing task plan.",
       parameters: { type: "object", properties: {}, additionalProperties: false }
     }
   },
@@ -944,37 +944,45 @@ async function executeToolCall(toolName, toolArgs, runtime, role, smartContext, 
   return `Tool ${toolName} not supported in batch mode.`;
 }
 
-/**
- * Build multi-layer system prompt (KiloCode-style)
- * Layers: soul.txt + provider_prompt(model) + environment() + instructionFiles() + agent_prompt
- */
-async function buildSystemPrompt(role, modelConfig, extraContext, projectRoot) {
-  const layers = [];
+const OUTPUT_STYLES = {
+  orchestrator: {
+    name: "Coordinated execution",
+    prompt: "Coordinate complex work in waves, preserve file ownership boundaries, and keep user-facing narration concise and grounded in the workspace.",
+  },
+  plan: {
+    name: "Architectural planning",
+    prompt: "Stay read-first, tighten assumptions against the workspace, and produce implementation-ready plans without drifting into execution.",
+  },
+};
 
-  // Layer 1: Soul (core personality)
+const TODO_TRACKING_SECTION = `# Task tracking
+ - For any non-trivial coding task, feature build, multi-file change, or request that will take 3 or more meaningful steps, create a todo list immediately using 'todowrite' before doing the main implementation work.
+ - After creating the todo list, mark exactly one task as 'in_progress' and keep the others pending until you reach them.
+ - Update the todo list as you progress. Mark tasks completed immediately after finishing them and add follow-up tasks if the scope changes.
+ - Use 'todoread' whenever you need to re-check the current plan before continuing.
+ - Skip todo tools only for truly trivial one-step work or purely informational requests.`;
+
+async function buildSystemPrompt(role, modelConfig, extraContext, projectRoot, options = {}) {
   const soul = loadSoulPrompt();
-  if (soul) layers.push(soul);
-
-  // Layer 2: Provider-specific prompt
   const providerPrompt = loadProviderPrompt(modelConfig?.id || modelConfig?.model || '');
-  if (providerPrompt) layers.push(providerPrompt);
+  const agentPrompt = loadPrompt(role, modelConfig || {}, extraContext);
+  const appendSections = [soul, providerPrompt, agentPrompt];
 
-  // Layer 3: Environment info
-  layers.push(`Environment:\n- Working directory: ${projectRoot || process.cwd()}\n- Platform: ${os.platform()} ${os.release()}\n- OS: ${os.type()}`);
-
-  // Layer 4: Instruction files (AGENTS.md, CLAUDE.md)
-  try {
-    const instructionPrompt = await buildInstructionPrompt(projectRoot || process.cwd());
-    if (instructionPrompt) layers.push(instructionPrompt);
-  } catch (e) {
-    // Skip if instruction loading fails
+  if (options.allowTodoTools !== false) {
+    appendSections.push(TODO_TRACKING_SECTION);
   }
 
-  // Layer 5: Agent-specific prompt
-  const agentPrompt = loadPrompt(role, modelConfig || {}, extraContext);
-  if (agentPrompt) layers.push(agentPrompt);
+  const promptRuntime = buildPromptRuntime({
+    role,
+    modelConfig,
+    projectRoot: projectRoot || process.cwd(),
+    osName: os.platform(),
+    osVersion: os.release(),
+    outputStyle: OUTPUT_STYLES[role] || null,
+    appendSections,
+  });
 
-  return layers.join('\n\n---\n\n');
+  return promptRuntime.prompt;
 }
 
 /**
@@ -986,7 +994,7 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
   const reporter = options.reporter || runtime.reporter || null;
   const extraContext = options.extraContext || {};
   const projectRoot = options.projectRoot || process.cwd();
-  const systemPrompt = await buildSystemPrompt(role, runtime.modelConfig || {}, extraContext, projectRoot);
+  const systemPrompt = await buildSystemPrompt(role, runtime.modelConfig || {}, extraContext, projectRoot, { allowTodoTools });
   const activeTools = getToolsForRole(role, { allowTodoTools });
   const batchRuntime = { ...runtime, allowTodoTools, projectRoot };
 
@@ -995,10 +1003,26 @@ export async function runAgentPipeline(userInput, smartContext, runtime, options
   const phaseLabel = `Agent Loop [${role.toUpperCase()}]`;
   emitReporter(reporter, "phaseHeader", { phase, label: phaseLabel, role });
 
-  let agentMessages = [
-    { role: "system", content: systemPrompt + "\n\nEnvironment Context:\n" + smartContext },
-    { role: "user", content: `<system-reminder>\nYour operational mode has changed from plan to code.\nYou are no longer in read-only mode.\nYou are permitted to make file changes, run shell commands, and utilize your arsenal of tools as needed.\n</system-reminder>\n\n` + userInput }
-  ];
+  let agentMessages = [{ role: "system", content: systemPrompt }];
+
+  if (options.continuationMessage) {
+    agentMessages.push({
+      role: "system",
+      content: `<continuation-context>\n${options.continuationMessage}\n</continuation-context>`,
+    });
+  }
+
+  if (smartContext && String(smartContext).trim()) {
+    agentMessages.push({
+      role: "system",
+      content: `<task-context>\n${smartContext}\n</task-context>`,
+    });
+  }
+
+  agentMessages.push({
+    role: "user",
+    content: `<system-reminder>\nYour operational mode has changed from plan to code.\nYou are no longer in read-only mode.\nYou are permitted to make file changes, run shell commands, and utilize your arsenal of tools as needed.\n</system-reminder>\n\n${userInput}`,
+  });
 
   let isFinished = false;
   let finalMessage = null;

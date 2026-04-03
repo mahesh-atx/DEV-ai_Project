@@ -78,6 +78,7 @@ export function createSession({ mode, model, projectDir = process.cwd(), title =
       duration: '0.0s',
       loopCount: 0,
     },
+    compaction: null,
     customBuildCmd: '',
     lastCheckpoint: null,
   };
@@ -94,6 +95,7 @@ export function saveSession(session, projectDir = process.cwd()) {
     updatedAt: new Date().toISOString(),
     messages: Array.isArray(session.messages) ? session.messages : [],
     activityLog: Array.isArray(session.activityLog) ? session.activityLog : [],
+    compaction: session.compaction || null,
   };
   fs.writeFileSync(filePath, JSON.stringify(nextSession, null, 2), 'utf8');
   updateIndex(nextSession, projectDir);

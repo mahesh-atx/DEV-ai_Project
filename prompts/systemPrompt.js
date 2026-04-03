@@ -36,7 +36,7 @@ export function loadProviderPrompt(modelId) {
 
 export function loadCompactionPrompt() {
   if (cache.has('compaction')) return cache.get('compaction');
-  const filePath = join(__dirname, 'compaction.txt');
+  const filePath = join(__dirname, 'legacy', 'compaction.txt');
   if (!existsSync(filePath)) return null;
   const content = readFileSync(filePath, 'utf-8');
   cache.set('compaction', content);

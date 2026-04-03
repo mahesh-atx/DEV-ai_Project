@@ -16,8 +16,27 @@ import {
   findLatestVisibleCollapsibleId,
 } from './chatUtils.js';
 
-const buildQuestionBodyLines = (questionText, maxWidth) => {
+const pushCommandPreviewLines = (lines, commandText, maxWidth) => {
+  if (!commandText) return;
+
+  lines.push({ segments: [{ text: 'Command', color: COLORS.dim, bold: true }] });
+  String(commandText).replace(/\r\n/g, '\n').split('\n').forEach((rawLine) => {
+    const text = rawLine || ' ';
+    wrapText(text, maxWidth).forEach((line) => {
+      lines.push({ segments: [{ text: line, color: COLORS.white, bold: true }] });
+    });
+  });
+  lines.push({ segments: [], empty: true });
+};
+
+const buildQuestionBodyLines = (questionPayload, maxWidth) => {
   const lines = [];
+  const questionText = typeof questionPayload === 'string' ? questionPayload : questionPayload?.question;
+  const commandPreview = typeof questionPayload === 'object' ? questionPayload?.commandPreview : '';
+
+  if (commandPreview) {
+    pushCommandPreviewLines(lines, commandPreview, maxWidth);
+  }
 
   String(questionText || '').replace(/\r\n/g, '\n').split('\n').forEach((rawLine) => {
     const trimmed = rawLine.trim();
@@ -181,8 +200,7 @@ const ChatScreen = ({
   const previousLineCountRef = useRef(0);
   const pendingQuestionLines = useMemo(() => {
     if (!pendingQuestion) return [];
-    const questionText = typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question;
-    return buildQuestionBodyLines(questionText, questionBodyWidth);
+    return buildQuestionBodyLines(pendingQuestion, questionBodyWidth);
   }, [pendingQuestion, questionBodyWidth]);
   const allLines = useMemo(() => {
     let lines = [];
@@ -389,26 +407,42 @@ const ChatScreen = ({
               ))}
               {pendingQuestion.options?.length > 0 ? (
                 <Box flexDirection="column" marginTop={1}>
+                  <Text color={COLORS.dim}>Choices</Text>
                   {pendingQuestion.options.map((option, index) => {
                     const isSelected = index === pendingQuestionIndex && !pendingQuestionManualEntry;
                     return (
-                      <Text
-                        key={option}
-                        color={isSelected ? COLORS.white : COLORS.dim}
-                        backgroundColor={isSelected ? COLORS.highlight : undefined}
-                        bold={isSelected}
-                      >
-                        {isSelected ? '> ' : '  '}{option}
-                      </Text>
+                      <Box key={`${option}-${index}`} flexDirection="row">
+                        <Text
+                          color={isSelected ? COLORS.orange : COLORS.dim}
+                          bold={isSelected}
+                        >
+                          {isSelected ? '> ' : '  '}
+                        </Text>
+                        <Text
+                          color={isSelected ? COLORS.white : COLORS.dim}
+                          backgroundColor={isSelected ? COLORS.highlight : undefined}
+                          bold={isSelected}
+                        >
+                          {option}
+                        </Text>
+                      </Box>
                     );
                   })}
-                  <Text
-                    color={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim}
-                    backgroundColor={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.highlight : undefined}
-                    bold={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry}
-                  >
-                    {pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? '> ' : '  '}Type your answer
-                  </Text>
+                  <Box flexDirection="row">
+                    <Text
+                      color={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.orange : COLORS.dim}
+                      bold={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry}
+                    >
+                      {pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? '> ' : '  '}
+                    </Text>
+                    <Text
+                      color={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim}
+                      backgroundColor={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.highlight : undefined}
+                      bold={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry}
+                    >
+                      Type your answer
+                    </Text>
+                  </Box>
                   <Text color={COLORS.dim}>
                     {pendingQuestionManualEntry ? 'Type below and press Enter. Esc returns to choices.' : 'Use arrows and Enter'}
                   </Text>

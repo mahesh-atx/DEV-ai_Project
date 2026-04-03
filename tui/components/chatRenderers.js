@@ -1,5 +1,6 @@
 import {
   COLORS,
+  buildFormattedLines,
   wrapText,
   ensureSpacer,
   isTopLevelActivity,
@@ -7,15 +8,26 @@ import {
 
 export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {}, expandedBlocks) {
     if (entry.kind === 'chat') {
-        let inCodeBlock = false;
-        wrapText(entry.text, maxW - 2).forEach((l, i) => {
-            if (l.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
-            let color = inCodeBlock ? COLORS.code : COLORS.white;
-            if (i === 0) {
-                linesArray.push({ segments: [{ text: '● ', color: COLORS.white }, { text: l, color }] });
-            } else {
-                linesArray.push({ segments: [{ text: '  ' }, { text: l, color }] });
+        const formattedLines = buildFormattedLines(entry.text, Math.max(8, maxW - 2));
+        let hasPrefixedFirstLine = false;
+
+        formattedLines.forEach((line) => {
+            if (line.empty) {
+                linesArray.push({ segments: [], empty: true });
+                return;
             }
+
+            const prefix = hasPrefixedFirstLine
+                ? [{ text: '  ' }]
+                : [{ text: '● ', color: COLORS.white }];
+
+            const segments = [
+                ...prefix,
+                ...(line.segments || [])
+            ];
+
+            linesArray.push({ segments });
+            hasPrefixedFirstLine = true;
         });
         return;
     }

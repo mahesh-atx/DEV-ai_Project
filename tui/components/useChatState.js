@@ -66,6 +66,7 @@ function buildEmptySessionDraft({ mode, model, title = 'New Session' }) {
     messages: [{ type: 'system', text: 'RootX Workspace initialized.', id: 'init' }],
     activityLog: [],
     summary: DEFAULT_SUMMARY,
+    compaction: null,
     customBuildCmd: '',
     lastCheckpoint: null,
   };
@@ -86,6 +87,23 @@ function hasMeaningfulSessionContent(session) {
 
 function getFirstMeaningfulUserMessage(messages = []) {
   return messages.find((message) => message?.type === 'user' && typeof message.text === 'string' && message.text.trim());
+}
+
+function buildCommandPreview(command, maxLines = 14, maxLineLength = 120) {
+  const normalized = String(command || '').replace(/\r\n/g, '\n').trim();
+  if (!normalized) return '';
+
+  const lines = normalized.split('\n').map((line) => (
+    line.length > maxLineLength ? `${line.slice(0, maxLineLength - 3)}...` : line
+  ));
+
+  if (lines.length <= maxLines) {
+    return lines.join('\n');
+  }
+
+  const visible = lines.slice(0, maxLines);
+  visible.push(`... (${lines.length - maxLines} more line${lines.length - maxLines === 1 ? '' : 's'})`);
+  return visible.join('\n');
 }
 
 export function useChatState({
@@ -149,6 +167,7 @@ export function useChatState({
   const msgIdCounter = useRef(0);
   const currentActivityRef = useRef([]);
   const currentSummaryRef = useRef(DEFAULT_SUMMARY);
+  const currentCompactionRef = useRef(null);
   const abortControllerRef = useRef(null);
   const lastCheckpointRef = useRef(null);
   const liveStatusTimeoutRef = useRef(null);
@@ -225,6 +244,7 @@ export function useChatState({
     messages: overrides.messages ?? messages,
     activityLog: overrides.activityLog ?? activityLog,
     summary: overrides.summary ?? currentSummaryRef.current,
+    compaction: overrides.compaction ?? currentCompactionRef.current,
     customBuildCmd: overrides.customBuildCmd ?? customBuildCmd,
     lastCheckpoint: overrides.lastCheckpoint ?? lastCheckpointRef.current,
   }), [activityLog, currentSessionId, currentSessionTitle, customBuildCmd, messages, mode, model]);
@@ -292,6 +312,7 @@ export function useChatState({
     sessionCreatedAtRef.current = draftSession?.createdAt || new Date().toISOString();
     currentActivityRef.current = [...restoredActivityLog];
     currentSummaryRef.current = draftSession?.summary || DEFAULT_SUMMARY;
+    currentCompactionRef.current = draftSession?.compaction || null;
     lastCheckpointRef.current = draftSession?.lastCheckpoint || null;
     msgIdCounter.current = deriveNextMessageCounter(restoredMessages);
 
@@ -1005,10 +1026,10 @@ export function useChatState({
     const [
       { default: runAgentPipeline }, { buildSmartContext }, { patchFile },
       { gitCheckpoint, gitRestore, gitDiscard }, { listWorkspaceEntries, searchWorkspaceFiles, searchWorkspaceContent },
-      { runWorkspaceLsp }, path, fs, { parseJSON }, policyModule
+      { runWorkspaceLsp }, path, fs, { parseJSON }, { compactConversation }, policyModule
     ] = await Promise.all([
       import('../../engine/agentController.js'), import('../../engine/context.js'), import('../../engine/patchEngine.js'),
-      import('../../utils/git.js'), import('../../utils/fileTools.js'), import('../../utils/lspTools.js'), import('path'), import('fs'), import('../../engine/jsonParser.js'),
+      import('../../utils/git.js'), import('../../utils/fileTools.js'), import('../../utils/lspTools.js'), import('path'), import('fs'), import('../../engine/jsonParser.js'), import('../../engine/prompt/compaction.js'),
       import('../../config/commandPolicy.js')
         .catch(() => import('../../engine/commandPolicy.js'))
         .catch(() => ({ loadProjectCommandPolicy: () => ({ blockedExecutables: [] }) }))
@@ -1016,6 +1037,17 @@ export function useChatState({
 
     const projectDir = process.cwd();
     const smartContext = buildSmartContext(projectDir, query, model, msgHistory);
+    const compactionResult = compactConversation(msgHistory, currentCompactionRef.current?.config);
+    currentCompactionRef.current = compactionResult.removedMessageCount > 0
+      ? {
+          summary: compactionResult.summary,
+          formattedSummary: compactionResult.formattedSummary,
+          continuationMessage: compactionResult.continuationMessage,
+          removedMessageCount: compactionResult.removedMessageCount,
+          preservedMessageCount: compactionResult.preservedMessageCount,
+          generatedAt: new Date().toISOString(),
+        }
+      : null;
     abortControllerRef.current = new AbortController();
 
     const runtime = {
@@ -1078,8 +1110,9 @@ export function useChatState({
         const answer = await reporter.askUser({
             title: isBlocked ? 'Bash (Policy Warning)' : 'Bash',
             question: isBlocked
-                ? `⚠️ WARNING: '${cmdBase}' is in your blockedExecutables policy!\n\nCommand: ${command}\n\nDo you want to allow it anyway?`
-                : `Command: ${command}\n\nRootX wants to execute this command.`,
+                ? `⚠️ WARNING: '${cmdBase}' is in your blockedExecutables policy!\n\nDo you want to allow it anyway?`
+                : 'RootX wants to execute this command.',
+            commandPreview: buildCommandPreview(command),
             options: ['Run', 'Skip', 'Fix']
         });
 
@@ -1167,7 +1200,13 @@ export function useChatState({
         const planFileRelative = path.relative(projectDir, planFile);
         const reminder = `\n\n<system-reminder>\nPlan file path: ${planFileRelative}\nWrite your complete plan to this file using write_file.\n</system-reminder>\n`;
 
-        execResult = await runAgentPipeline(query + reminder, smartContext, runtime, { autoPolish: false, role, reporter, extraContext: { planFile: planFileRelative } });
+        execResult = await runAgentPipeline(query + reminder, smartContext, runtime, {
+          autoPolish: false,
+          role,
+          reporter,
+          extraContext: { planFile: planFileRelative },
+          continuationMessage: currentCompactionRef.current?.continuationMessage || '',
+        });
 
         if (checkpoint) {
           if (lastCheckpointRef.current) gitDiscard(lastCheckpointRef.current);
@@ -1193,7 +1232,12 @@ export function useChatState({
         return { type: 'assistant', text: `## Plan: ${planFileRelative}\n\n${cleanPlanContent}`, id: nextId(), planFollowup: 'dismissed' };
       }
 
-      execResult = await runAgentPipeline(query, smartContext, runtime, { autoPolish: activeMode.value === 'polish', role, reporter });
+      execResult = await runAgentPipeline(query, smartContext, runtime, {
+        autoPolish: activeMode.value === 'polish',
+        role,
+        reporter,
+        continuationMessage: currentCompactionRef.current?.continuationMessage || '',
+      });
       if (checkpoint) {
         if (lastCheckpointRef.current) gitDiscard(lastCheckpointRef.current);
         lastCheckpointRef.current = checkpoint;
@@ -1312,6 +1356,7 @@ export function useChatState({
       setMessages([{ type: 'system', text: 'Chat history cleared.', id: nextId() }]);
       currentActivityRef.current = [];
       currentSummaryRef.current = DEFAULT_SUMMARY;
+      currentCompactionRef.current = null;
       setActivityLog([]);
       setInput('');
       setScrollOffset(0);

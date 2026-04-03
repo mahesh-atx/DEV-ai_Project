@@ -10,11 +10,12 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const LEGACY_DIR = path.join(__dirname, 'legacy');
 
-const basePrompt = fs.readFileSync(path.join(__dirname, 'base.txt'), 'utf8');
-const websitePrompt = fs.readFileSync(path.join(__dirname, 'website.txt'), 'utf8');
-const webappPrompt = fs.readFileSync(path.join(__dirname, 'webapp.txt'), 'utf8');
-const scriptPrompt = fs.readFileSync(path.join(__dirname, 'script.txt'), 'utf8');
+const basePrompt = fs.readFileSync(path.join(LEGACY_DIR, 'base.txt'), 'utf8');
+const websitePrompt = fs.readFileSync(path.join(LEGACY_DIR, 'website.txt'), 'utf8');
+const webappPrompt = fs.readFileSync(path.join(LEGACY_DIR, 'webapp.txt'), 'utf8');
+const scriptPrompt = fs.readFileSync(path.join(LEGACY_DIR, 'script.txt'), 'utf8');
 
 // Agent role prompts (KiloCode-style)
 const ROLE_PROMPTS = {
@@ -39,7 +40,8 @@ const ROLE_PROMPT_FILES = {
 
 for (const [role, fileName] of Object.entries(ROLE_PROMPT_FILES)) {
   try {
-    ROLE_PROMPTS[role] = fs.readFileSync(path.join(__dirname, fileName), 'utf8');
+    const promptDir = ['general.txt', 'orchestrator.txt', 'planner.txt'].includes(fileName) ? __dirname : LEGACY_DIR;
+    ROLE_PROMPTS[role] = fs.readFileSync(path.join(promptDir, fileName), 'utf8');
   } catch (e) {
     ROLE_PROMPTS[role] = null;
   }
