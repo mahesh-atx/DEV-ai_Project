@@ -49,6 +49,13 @@ RootX can maintain a structured todo list for complex work and render it directl
 - Only the main agent owns the shared todo list; delegated subagents do not update it directly
 - Todo updates render as checklist-style transcript blocks with pending, in-progress, and completed states
 
+### 11. Persistent Sessions
+RootX now keeps chat work separated by session so you can stop and resume without mixing unrelated threads.
+- Chat sessions are stored in `.rootx/sessions/`
+- The CLI remembers the last active session and offers a quick resume from the main menu
+- Each session keeps its own messages, activity log, summary, and custom build command
+- The Sessions screen lets you open, rename, delete, and create sessions directly from the TUI
+
 ---
 
 ## 🌍 Installation
@@ -105,6 +112,21 @@ You can also add an OpenRouter key with `OPENROUTER_API_KEY=...` in `.env` or th
 
 If both stored config and `.env` exist for the same provider, the `.env` value wins.
 
+### Sessions
+
+RootX opens work inside named sessions instead of one shared transcript.
+
+- Choose `Start New Session` to begin fresh work
+- Choose `Resume: "<title>"` to reopen the last active session instantly
+- Open the `Sessions` menu to browse saved sessions and manage them
+- Empty drafts are not saved until there is meaningful session content
+
+Session files live in:
+
+```text
+.rootx/sessions/
+```
+
 ### In-Session Commands
 
 | Command        | Description                                          |
@@ -112,6 +134,11 @@ If both stored config and `.env` exist for the same provider, the `.env` value w
 | `/plan <desc>` | Enter Planner Mode to research and document an architecture plan |
 | `/build`       | Drop into the Self-Debugger. Runs your build/test script and auto-fixes errors |
 | `/build <cmd>` | Set a custom build command globally (e.g., `/build npm run typecheck`) |
+| `/new`         | Start a fresh session                                |
+| `/switch`      | Return to the Sessions screen                        |
+| `/sessions`    | Show saved sessions inside chat                      |
+| `/rename <title>` | Rename the current session                       |
+| `/delete <id>` | Delete a saved session by id                         |
 | `/git <msg>`   | Quick sequence to add, commit, and push your current changes |
 | `/polish`      | Triggers the UI/UX auto-polish designer agent        |
 | `undo` / `n`   | Revert the very last AI edit instantly               |

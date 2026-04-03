@@ -3,9 +3,10 @@ import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
 import { THEME, LOGO } from '../constants.js';
 
-const MainMenu = ({ mode, model, onSelect }) => {
+const MainMenu = ({ mode, model, onSelect, sessionCount = 0, resumeTitle = '' }) => {
   const items = [
-    { label: 'Start Session', value: 'chat' },
+    { label: resumeTitle ? `Resume: "${resumeTitle}"` : 'Start New Session', value: 'chat' },
+    { label: `Sessions${sessionCount ? ` (${sessionCount})` : ''}`, value: 'sessions' },
     { label: `Change Mode  [ Current: ${mode.label} ]`, value: 'modes' },
     { label: `Change Model [ Current: ${model.label} ]`, value: 'models' },
     { label: 'Settings', value: 'settings' },
@@ -16,6 +17,7 @@ const MainMenu = ({ mode, model, onSelect }) => {
     if (item.value === 'exit') {
       process.exit(0);
     }
+
     onSelect(item.value);
   };
 
@@ -31,7 +33,7 @@ const MainMenu = ({ mode, model, onSelect }) => {
         <Box flexDirection="column" alignItems="center" marginBottom={2}>
           <Text color={THEME.accent}>{LOGO}</Text>
           <Box marginTop={1}>
-            <Text color={THEME.dim}>v5.0.0 ⸺ Multimodal • Persistent Memory • Real-time Streaming</Text>
+            <Text color={THEME.dim}>v6.0.0 | Multimodal | Persistent Memory | Real-time Streaming</Text>
           </Box>
         </Box>
 
@@ -41,7 +43,7 @@ const MainMenu = ({ mode, model, onSelect }) => {
             onSelect={handleSelect}
             indicatorComponent={({ isSelected }) => (
               <Text color={isSelected ? THEME.accent : THEME.dim}>
-                {isSelected ? '❯ ' : '  '}
+                {isSelected ? '> ' : '  '}
               </Text>
             )}
             itemComponent={({ isSelected, label }) => (
@@ -55,7 +57,7 @@ const MainMenu = ({ mode, model, onSelect }) => {
         <Box
           marginTop={2}
           paddingTop={1}
-          borderTop={true}
+          borderTop
           borderBottom={false}
           borderLeft={false}
           borderRight={false}
@@ -64,10 +66,11 @@ const MainMenu = ({ mode, model, onSelect }) => {
           alignItems="center"
           flexDirection="column"
         >
+          <Text color={THEME.dim}>Tip: Configure your run before starting the session.</Text>
           <Text color={THEME.dim}>
-            Tip: Configure your run before starting the session.
+            {resumeTitle ? `Last active: ${resumeTitle}` : 'No saved sessions yet.'}
           </Text>
-          <Text color={THEME.dim}>Use ↑/↓ arrows to navigate, Enter to select</Text>
+          <Text color={THEME.dim}>Use Up/Down arrows to navigate, Enter to select</Text>
         </Box>
       </Box>
     </Box>

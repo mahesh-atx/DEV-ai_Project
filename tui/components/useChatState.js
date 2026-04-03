@@ -6,6 +6,16 @@ import { createClient } from '../../config/apiClient.js';
 import { estimateTokens, getSafeMaxTokens } from '../../utils/budgeting.js';
 import { normalizeTodoList } from '../../utils/todoStore.js';
 import {
+  createSession,
+  deleteSession,
+  generateSmartTitle,
+  listSessions,
+  loadSession,
+  renameSession,
+  saveSession,
+  setLastActiveSession,
+} from '../../utils/sessionStore.js';
+import {
   DEFAULT_SUMMARY,
   truncate,
   buildToolNarrationSummary,
@@ -36,7 +46,62 @@ function estimateMessageTokens(messages = []) {
   }, 0);
 }
 
-export function useChatState({ mode, model, availableModes = MODES, availableModels = [], onModeChange, onModelChange, onExit }) {
+function deriveNextMessageCounter(messages = []) {
+  return messages.reduce((maxValue, message) => {
+    const match = /^msg-(\d+)-/.exec(message?.id || '');
+    const numericId = match ? Number(match[1]) : 0;
+    return Number.isFinite(numericId) ? Math.max(maxValue, numericId) : maxValue;
+  }, 0);
+}
+
+function buildEmptySessionDraft({ mode, model, title = 'New Session' }) {
+  const now = new Date().toISOString();
+  return {
+    id: null,
+    title,
+    createdAt: now,
+    updatedAt: now,
+    mode: mode ? { value: mode.value, label: mode.label } : null,
+    model: model ? { key: model.key, name: model.name } : null,
+    messages: [{ type: 'system', text: 'RootX Workspace initialized.', id: 'init' }],
+    activityLog: [],
+    summary: DEFAULT_SUMMARY,
+    customBuildCmd: '',
+    lastCheckpoint: null,
+  };
+}
+
+function hasMeaningfulSessionContent(session) {
+  if (!session) return false;
+  if (typeof session.customBuildCmd === 'string' && session.customBuildCmd.trim()) return true;
+  if (Array.isArray(session.activityLog) && session.activityLog.length > 0) return true;
+  if (!Array.isArray(session.messages)) return false;
+
+  return session.messages.some((message) => {
+    if (!message) return false;
+    if (message.type === 'system' && message.id === 'init') return false;
+    return typeof message.text === 'string' ? message.text.trim().length > 0 : true;
+  });
+}
+
+function getFirstMeaningfulUserMessage(messages = []) {
+  return messages.find((message) => message?.type === 'user' && typeof message.text === 'string' && message.text.trim());
+}
+
+export function useChatState({
+  mode,
+  model,
+  sessionId,
+  sessionTitle,
+  availableModes = MODES,
+  availableModels = [],
+  onModeChange,
+  onModelChange,
+  onSessionMetaChange,
+  onRequestSessions,
+  onNewSession,
+  onExit,
+}) {
   const { stdout } = useStdout();
 
   const [dims, setDims] = useState({
@@ -52,6 +117,9 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
   const [elapsedTime, setElapsedTime] = useState(0);
   const [currentTurn, setCurrentTurn] = useState(1);
   const [customBuildCmd, setCustomBuildCmd] = useState('');
+  const [currentSessionId, setCurrentSessionId] = useState(sessionId || null);
+  const [currentSessionTitle, setCurrentSessionTitle] = useState(sessionTitle || 'New Session');
+  const [sessionReady, setSessionReady] = useState(false);
 
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -87,6 +155,8 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
   const visibleCollapsibleIdRef = useRef(null);
   const activeToolPhaseRef = useRef('');
   const activeRunTokenRef = useRef(0);
+  const sessionCreatedAtRef = useRef(null);
+  const latestSessionSnapshotRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -135,6 +205,176 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
       clearTimeout(liveStatusTimeoutRef.current);
     }
   }, []);
+
+  const updateSessionMeta = useCallback((nextSessionId, nextTitle) => {
+    const resolvedTitle = nextTitle || 'New Session';
+    setCurrentSessionId(nextSessionId);
+    setCurrentSessionTitle(resolvedTitle);
+    if (typeof onSessionMetaChange === 'function') {
+      onSessionMetaChange({ sessionId: nextSessionId, title: resolvedTitle });
+    }
+  }, [onSessionMetaChange]);
+
+  const buildSessionSnapshot = useCallback((overrides = {}) => ({
+    id: overrides.id ?? currentSessionId,
+    title: overrides.title ?? currentSessionTitle ?? 'New Session',
+    createdAt: overrides.createdAt ?? sessionCreatedAtRef.current ?? new Date().toISOString(),
+    updatedAt: overrides.updatedAt ?? new Date().toISOString(),
+    mode: mode ? { value: mode.value, label: mode.label } : null,
+    model: model ? { key: model.key, name: model.name } : null,
+    messages: overrides.messages ?? messages,
+    activityLog: overrides.activityLog ?? activityLog,
+    summary: overrides.summary ?? currentSummaryRef.current,
+    customBuildCmd: overrides.customBuildCmd ?? customBuildCmd,
+    lastCheckpoint: overrides.lastCheckpoint ?? lastCheckpointRef.current,
+  }), [activityLog, currentSessionId, currentSessionTitle, customBuildCmd, messages, mode, model]);
+
+  const persistSession = useCallback((overrides = {}) => {
+    const snapshot = buildSessionSnapshot(overrides);
+    const firstUserMessage = getFirstMeaningfulUserMessage(snapshot.messages);
+    const resolvedTitle = snapshot.title === 'New Session' && firstUserMessage
+      ? generateSmartTitle(firstUserMessage.text)
+      : snapshot.title;
+    const snapshotToSave = {
+      ...snapshot,
+      title: resolvedTitle,
+    };
+    let targetSessionId = overrides.id ?? currentSessionId;
+
+    if (!targetSessionId) {
+      if (!hasMeaningfulSessionContent(snapshotToSave)) {
+        latestSessionSnapshotRef.current = snapshotToSave;
+        return null;
+      }
+
+      const createdSession = createSession({
+        mode: snapshotToSave.mode,
+        model: snapshotToSave.model,
+        title: snapshotToSave.title,
+      });
+      targetSessionId = createdSession.id;
+      sessionCreatedAtRef.current = createdSession.createdAt;
+      updateSessionMeta(createdSession.id, createdSession.title);
+    }
+
+    const savedSession = saveSession({
+      ...snapshotToSave,
+      id: targetSessionId,
+      createdAt: snapshotToSave.createdAt ?? sessionCreatedAtRef.current,
+    });
+    sessionCreatedAtRef.current = savedSession.createdAt;
+    if (savedSession.id !== currentSessionId || savedSession.title !== currentSessionTitle) {
+      updateSessionMeta(savedSession.id, savedSession.title);
+    }
+    latestSessionSnapshotRef.current = savedSession;
+    return savedSession;
+  }, [buildSessionSnapshot, currentSessionId, currentSessionTitle, updateSessionMeta]);
+
+  const getSessionState = useCallback(() => buildSessionSnapshot(), [buildSessionSnapshot]);
+
+  const promptUserSelection = useCallback(({ question, options = [], title = 'Action Required' }) => (
+    new Promise((resolve) => {
+      setPendingQuestion({ question, options, title });
+      setPendingQuestionIndex(0);
+      setPendingQuestionManualEntry(false);
+      setInput('');
+      questionResolverRef.current = resolve;
+    })
+  ), []);
+
+  const restoreSessionState = useCallback((session) => {
+    const draftSession = session || buildEmptySessionDraft({ title: 'New Session' });
+    const restoredMessages = Array.isArray(draftSession?.messages) && draftSession.messages.length > 0
+      ? draftSession.messages
+      : [{ type: 'system', text: 'RootX Workspace initialized.', id: 'init' }];
+    const restoredActivityLog = Array.isArray(draftSession?.activityLog) ? draftSession.activityLog : [];
+
+    sessionCreatedAtRef.current = draftSession?.createdAt || new Date().toISOString();
+    currentActivityRef.current = [...restoredActivityLog];
+    currentSummaryRef.current = draftSession?.summary || DEFAULT_SUMMARY;
+    lastCheckpointRef.current = draftSession?.lastCheckpoint || null;
+    msgIdCounter.current = deriveNextMessageCounter(restoredMessages);
+
+    setMessages(restoredMessages);
+    setActivityLog(restoredActivityLog);
+    setCustomBuildCmd(draftSession?.customBuildCmd || '');
+    setInput('');
+    setHistory([]);
+    setHistoryIndex(-1);
+    setShowQuestions(false);
+    setShowShortcuts(false);
+    setPickerState(null);
+    setFollowLive(true);
+    setScrollOffset(0);
+    setExpandedBlocks(new Set());
+    setStreamLabel('Waiting for input');
+    setStreamResponseContent('');
+    setLiveStatus(null);
+    setPendingQuestion(null);
+    setPendingQuestionIndex(0);
+    setPendingQuestionManualEntry(false);
+    setPlanFollowup(null);
+    setElapsedTime(0);
+    setCurrentTurn(draftSession?.summary?.loopCount || 1);
+
+    latestSessionSnapshotRef.current = draftSession;
+    updateSessionMeta(draftSession.id || null, draftSession.title || 'New Session');
+    setSessionReady(true);
+  }, [updateSessionMeta]);
+
+  useEffect(() => {
+    setSessionReady(false);
+
+    const loadedSession = sessionId
+      ? loadSession(sessionId)
+      : buildEmptySessionDraft({ mode, model, title: sessionTitle || 'New Session' });
+
+    restoreSessionState(loadedSession);
+  }, [restoreSessionState, sessionId]);
+
+  useEffect(() => {
+    if (!sessionReady || !currentSessionId) return;
+    setLastActiveSession(currentSessionId);
+  }, [currentSessionId, sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady || !currentSessionId) return;
+    latestSessionSnapshotRef.current = buildSessionSnapshot();
+  }, [activityLog, buildSessionSnapshot, currentSessionId, currentSessionTitle, customBuildCmd, messages, mode, model, sessionReady]);
+
+  useEffect(() => () => {
+    if (latestSessionSnapshotRef.current) {
+      const snapshot = latestSessionSnapshotRef.current;
+      if (snapshot.id || hasMeaningfulSessionContent(snapshot)) {
+        persistSession(snapshot);
+      }
+    }
+  }, [persistSession]);
+
+  useEffect(() => {
+    if (!sessionReady || !currentSessionId) return;
+    const timer = setTimeout(() => {
+      persistSession();
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [activityLog, currentSessionId, currentSessionTitle, customBuildCmd, messages, mode, model, persistSession, sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady || currentSessionTitle !== 'New Session') return;
+
+    const firstUserMessage = getFirstMeaningfulUserMessage(messages);
+    if (!firstUserMessage) return;
+
+    const smartTitle = generateSmartTitle(firstUserMessage.text);
+    if (!smartTitle || smartTitle === currentSessionTitle) return;
+
+    updateSessionMeta(currentSessionId, smartTitle);
+  }, [currentSessionId, currentSessionTitle, messages, sessionReady, updateSessionMeta]);
+
+  const shouldCaptureGlobalInput = Boolean(
+    pendingQuestion || pickerState || showQuestions || showShortcuts || isThinking
+  );
 
   const toggleLatestCollapsible = useCallback(() => {
     const targetId = visibleCollapsibleIdRef.current || findLatestCollapsibleId(currentActivityRef.current, messages);
@@ -283,7 +523,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
         }
       }
     }
-  });
+  }, { isActive: shouldCaptureGlobalInput });
 
   const nextId = useCallback(() => {
     msgIdCounter.current += 1;
@@ -699,16 +939,12 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
         pushActivity(level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'status', message);
       }
     },
-    askUser: ({ question, options, title }) => {
-      return new Promise((resolve) => {
-        setPendingQuestion({ question, options: options || [], title: title || 'Action Required' });
-        setPendingQuestionIndex(0);
-        setPendingQuestionManualEntry(false);
-        setInput('');
-        questionResolverRef.current = resolve;
-      });
-    },
-  }), [pushActivity, updateLastActivity, updateSummary, nextId]);
+    askUser: ({ question, options, title }) => promptUserSelection({
+      question,
+      options: options || [],
+      title: title || 'Action Required',
+    }),
+  }), [pushActivity, updateLastActivity, updateSummary, nextId, promptUserSelection]);
 
   const runAskMode = useCallback(async (query, msgHistory) => {
     const client = clientRef.current;
@@ -1057,18 +1293,112 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
     setHistoryIndex(-1);
 
     if (trimmed.toLowerCase() === '/exit' || trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === '/quit') {
+      persistSession();
       onExit();
       return;
     }
 
     if (trimmed.toLowerCase() === '/clear') {
       setMessages([{ type: 'system', text: 'Chat history cleared.', id: nextId() }]);
+      currentActivityRef.current = [];
+      currentSummaryRef.current = DEFAULT_SUMMARY;
+      setActivityLog([]);
       setInput('');
       setScrollOffset(0);
       return;
     }
 
     const normalizedTrimmed = trimmed.toLowerCase();
+
+    if (normalizedTrimmed === '/new') {
+      persistSession();
+      setInput('');
+      if (typeof onNewSession === 'function') onNewSession();
+      return;
+    }
+
+    if (normalizedTrimmed === '/switch') {
+      persistSession();
+      setInput('');
+      if (typeof onRequestSessions === 'function') onRequestSessions();
+      return;
+    }
+
+    if (normalizedTrimmed === '/sessions') {
+      const savedSessions = listSessions();
+      if (savedSessions.length === 0) {
+        appendMessage('system', 'No saved sessions found.');
+        setInput('');
+        return;
+      }
+
+      const sessionLines = savedSessions.map((entry, index) => (
+        `${index + 1}. ${entry.id === currentSessionId ? '* ' : ''}${entry.title} [${entry.id}] - ${entry.messageCount || 0} msgs - ${entry.mode || 'Unknown'}`
+      ));
+      appendMessage('assistant', `Saved sessions:\n${sessionLines.join('\n')}`);
+      setInput('');
+      return;
+    }
+
+    if (/^\/rename(\s|$)/.test(normalizedTrimmed)) {
+      const requestedTitle = trimmed.slice(7).trim();
+      if (!requestedTitle) {
+        appendMessage('system', 'Usage: /rename <title>');
+        setInput('');
+        return;
+      }
+
+      if (!currentSessionId) {
+        appendMessage('system', 'There is no active session to rename.');
+        setInput('');
+        return;
+      }
+
+      renameSession(currentSessionId, requestedTitle);
+      updateSessionMeta(currentSessionId, requestedTitle);
+      appendMessage('system', `Session renamed to "${requestedTitle}".`);
+      setInput('');
+      return;
+    }
+
+    if (/^\/delete(\s|$)/.test(normalizedTrimmed)) {
+      const targetSessionId = trimmed.slice(7).trim();
+      if (!targetSessionId) {
+        appendMessage('system', 'Usage: /delete <session-id>');
+        setInput('');
+        return;
+      }
+
+      if (targetSessionId === currentSessionId) {
+        appendMessage('system', 'Switch away from the active session before deleting it.');
+        setInput('');
+        return;
+      }
+
+      const targetSession = listSessions().find((entry) => entry.id === targetSessionId);
+      if (!targetSession) {
+        appendMessage('system', `Session not found: ${targetSessionId}`);
+        setInput('');
+        return;
+      }
+
+      const confirmation = await promptUserSelection({
+        title: 'Delete Session',
+        question: `Delete "${targetSession.title}"? This cannot be undone.`,
+        options: ['Delete', 'Cancel'],
+      });
+
+      if (String(confirmation || '').toLowerCase() !== 'delete') {
+        appendMessage('system', 'Delete cancelled.');
+        setInput('');
+        return;
+      }
+
+      deleteSession(targetSessionId);
+      appendMessage('system', `Deleted session "${targetSession.title}".`);
+      setInput('');
+      return;
+    }
 
     if (/^\/model(\s|$)/.test(normalizedTrimmed)) {
       setInput('');
@@ -1183,7 +1513,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
     setInput('');
     setScrollOffset(0);
     executeHandler(query, activeMode);
-  }, [appendMessage, applyModeSwitch, applyModelSwitch, availableModels, availableModes, executeHandler, mode, model, nextId, onExit, pendingQuestion, pendingQuestionIndex, pendingQuestionManualEntry, resolveBuildCommand, resolvePendingQuestionAnswer, runGitShortcut, runUndoShortcut, toggleLatestCollapsible]);
+  }, [appendMessage, applyModeSwitch, applyModelSwitch, availableModels, availableModes, currentSessionId, executeHandler, mode, model, nextId, onExit, onNewSession, onRequestSessions, pendingQuestion, pendingQuestionIndex, pendingQuestionManualEntry, persistSession, promptUserSelection, resolveBuildCommand, resolvePendingQuestionAnswer, runGitShortcut, runUndoShortcut, toggleLatestCollapsible, updateSessionMeta]);
 
   return {
     dims,
@@ -1200,6 +1530,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
     scrollOffset,
     setScrollOffset,
     expandedBlocks,
+    currentSessionTitle,
     streamLabel,
     streamResponseContent,
     activityLog,
@@ -1211,6 +1542,7 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
     planFollowup, setPlanFollowup, planFollowupResolverRef,
     currentActivityRef,
     visibleCollapsibleIdRef,
+    getSessionState,
     handleSubmit,
     toggleLatestCollapsible,
     pushActivity,

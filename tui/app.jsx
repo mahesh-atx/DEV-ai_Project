@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box } from 'ink';
 import MainMenu from './components/MainMenu.jsx';
 import ModeSelect from './components/ModeSelect.jsx';
@@ -6,9 +6,18 @@ import ModelSelect from './components/ModelSelect.jsx';
 import ChatScreen from './components/ChatScreen.jsx';
 import SettingsScreen from './components/SettingsScreen.jsx';
 import SetupScreen from './components/SetupScreen.jsx';
+import SessionSelect from './components/SessionSelect.jsx';
 import { MODES } from './constants.js';
 import { listModels, getModel } from '../config/models.js';
 import { hasAnyApiKey } from '../utils/configManager.js';
+import {
+  deleteSession,
+  getLastSession,
+  listSessions,
+  loadSession,
+  renameSession,
+  setLastActiveSession,
+} from '../utils/sessionStore.js';
 
 const DEFAULT_MODEL_KEY = 'kimi';
 
@@ -62,21 +71,54 @@ const App = () => {
   const [modelDisplay, setModelDisplay] = useState(getModelDisplay(initialModelKey));
   const [setupTargetModelKey, setSetupTargetModelKey] = useState(null);
 
-  const resolveModel = (key) => {
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [sessions, setSessions] = useState([]);
+  const [lastSessionTitle, setLastSessionTitle] = useState('');
+  const [chatInstanceKey, setChatInstanceKey] = useState(0);
+
+  const resolveModel = useCallback((key) => {
     try {
       const config = getModel(key);
       return { ...config, key };
-    } catch (e) {
+    } catch {
       return null;
     }
-  };
+  }, []);
+
+  const currentModel = useMemo(() => (
+    modelConfig || {
+      key: modelKey,
+      name: modelDisplay.label,
+      id: modelDisplay.id || '',
+      provider: modelDisplay.provider || '',
+      providerName: modelDisplay.providerName || '',
+      apiKey: '',
+      baseURL: '',
+      temperature: 1.0,
+      topP: 1.0,
+      maxTokens: 16384,
+      extraParams: {},
+    }
+  ), [modelConfig, modelDisplay, modelKey]);
+
+  const refreshSessions = useCallback(() => {
+    const nextSessions = listSessions();
+    const lastSession = getLastSession();
+    setSessions(nextSessions);
+    setLastSessionTitle(lastSession?.title || '');
+  }, []);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   const openSetup = (targetModelKey = null) => {
     setSetupTargetModelKey(targetModelKey);
     setView('setup');
   };
 
-  const applyModelSelection = (selectedKey, selectedName) => {
+  const applyModelSelection = (selectedKey) => {
     const config = resolveModel(selectedKey);
     if (!config) {
       openSetup(selectedKey);
@@ -89,33 +131,96 @@ const App = () => {
     return true;
   };
 
+  const applySessionPreferences = useCallback((session) => {
+    if (session?.mode?.value) {
+      const matchedMode = MODES.find((entry) => entry.value === session.mode.value)
+        || MODES.find((entry) => entry.label === session.mode.label);
+      if (matchedMode) {
+        setMode(matchedMode);
+      }
+    }
+
+    if (session?.model?.key) {
+      const config = resolveModel(session.model.key);
+      if (config) {
+        setModelKey(session.model.key);
+        setModelDisplay(getModelDisplay(session.model.key));
+        setModelConfig(config);
+      }
+    }
+  }, [resolveModel]);
+
+  const openSessionById = useCallback((targetSessionId) => {
+    const session = loadSession(targetSessionId);
+    if (!session) {
+      refreshSessions();
+      setView('sessions');
+      return;
+    }
+
+    applySessionPreferences(session);
+    setLastActiveSession(session.id);
+    setSessionId(session.id);
+    setSessionTitle(session.title || 'New Session');
+    setChatInstanceKey((value) => value + 1);
+    refreshSessions();
+    setView('chat');
+  }, [applySessionPreferences, refreshSessions]);
+
+  const createAndOpenSession = useCallback(() => {
+    setSessionId(null);
+    setSessionTitle('New Session');
+    setChatInstanceKey((value) => value + 1);
+    setView('chat');
+  }, []);
+
   const handleModelSelect = (selected) => {
-    if (applyModelSelection(selected.key, selected.name)) {
+    if (applyModelSelection(selected.key)) {
       setView('welcome');
     }
   };
 
   const handleModelChangeInChat = (selected) => {
-    applyModelSelection(selected.key, selected.name);
+    applyModelSelection(selected.key);
   };
 
   const handleModeChangeInChat = (selectedMode) => {
     setMode(selectedMode);
   };
 
-  const currentModel = modelConfig || {
-    key: modelKey,
-    name: modelDisplay.label,
-    id: modelDisplay.id || '',
-    provider: modelDisplay.provider || '',
-    providerName: modelDisplay.providerName || '',
-    apiKey: '',
-    baseURL: '',
-    temperature: 1.0,
-    topP: 1.0,
-    maxTokens: 16384,
-    extraParams: {},
-  };
+  const handleSessionMetaChange = useCallback((metadata) => {
+    if (metadata?.sessionId && metadata.sessionId !== sessionId) {
+      setSessionId(metadata.sessionId);
+    }
+    if (metadata?.title) {
+      setSessionTitle(metadata.title);
+    }
+    refreshSessions();
+  }, [refreshSessions, sessionId]);
+
+  const handleRequestSessions = useCallback(() => {
+    refreshSessions();
+    setView('sessions');
+  }, [refreshSessions]);
+
+  const handleChatNewSession = useCallback(() => {
+    createAndOpenSession();
+  }, [createAndOpenSession]);
+
+  const handleChatExit = useCallback(() => {
+    refreshSessions();
+    setView('welcome');
+  }, [refreshSessions]);
+
+  const handleStartSession = useCallback(() => {
+    const lastSession = getLastSession();
+    if (lastSession?.id) {
+      openSessionById(lastSession.id);
+      return;
+    }
+
+    createAndOpenSession();
+  }, [createAndOpenSession, openSessionById]);
 
   return (
     <Box>
@@ -140,19 +245,25 @@ const App = () => {
         <MainMenu
           mode={mode}
           model={{ label: currentModel.name }}
-          onSelect={(v) => {
-            if (v === 'modes') setView('modeSelect');
-            else if (v === 'models') setView('modelSelect');
-            else if (v === 'chat') {
+          sessionCount={sessions.length}
+          resumeTitle={lastSessionTitle}
+          onSelect={(selectedView) => {
+            if (selectedView === 'modes') setView('modeSelect');
+            else if (selectedView === 'models') setView('modelSelect');
+            else if (selectedView === 'chat') {
               const config = resolveModel(modelKey);
               if (config) {
                 setModelConfig(config);
-                setView('chat');
+                handleStartSession();
               } else {
                 openSetup(modelKey);
               }
+            } else if (selectedView === 'sessions') {
+              refreshSessions();
+              setView('sessions');
+            } else {
+              setView(selectedView);
             }
-            else setView(v);
           }}
         />
       )}
@@ -174,15 +285,51 @@ const App = () => {
         />
       )}
 
+      {view === 'sessions' && (
+        <SessionSelect
+          sessions={sessions}
+          activeSessionId={sessionId}
+          onBack={() => {
+            refreshSessions();
+            setView('welcome');
+          }}
+          onOpen={openSessionById}
+          onRename={async (targetSessionId, newTitle) => {
+            renameSession(targetSessionId, newTitle);
+            if (targetSessionId === sessionId) {
+              setSessionTitle(newTitle);
+            }
+            refreshSessions();
+          }}
+          onDelete={async (targetSessionId) => {
+            deleteSession(targetSessionId);
+            if (targetSessionId === sessionId) {
+              setSessionId(null);
+              setSessionTitle('');
+            }
+            refreshSessions();
+          }}
+          onNewSession={async () => {
+            createAndOpenSession();
+          }}
+        />
+      )}
+
       {view === 'chat' && (
         <ChatScreen
+          key={`${sessionId || 'unsaved'}-${chatInstanceKey}`}
           mode={mode}
           model={currentModel}
+          sessionId={sessionId}
+          sessionTitle={sessionTitle}
           availableModes={MODES}
           availableModels={listModels()}
           onModeChange={handleModeChangeInChat}
           onModelChange={handleModelChangeInChat}
-          onExit={() => setView('welcome')}
+          onSessionMetaChange={handleSessionMetaChange}
+          onRequestSessions={handleRequestSessions}
+          onNewSession={handleChatNewSession}
+          onExit={handleChatExit}
         />
       )}
 

@@ -48,7 +48,20 @@ const buildQuestionBodyLines = (questionText, maxWidth) => {
   return lines;
 };
 
-const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], onModeChange, onModelChange, onExit }) => {
+const ChatScreen = ({
+  mode,
+  model,
+  sessionId,
+  sessionTitle,
+  availableModes = [],
+  availableModels = [],
+  onModeChange,
+  onModelChange,
+  onSessionMetaChange,
+  onRequestSessions,
+  onNewSession,
+  onExit,
+}) => {
   const {
     dims,
     messages,
@@ -78,7 +91,21 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
     toggleLatestCollapsible,
     setShowQuestions,
     pushActivity,
-  } = useChatState({ mode, model, availableModes, availableModels, onModeChange, onModelChange, onExit });
+    currentSessionTitle,
+  } = useChatState({
+    mode,
+    model,
+    sessionId,
+    sessionTitle,
+    availableModes,
+    availableModels,
+    onModeChange,
+    onModelChange,
+    onSessionMetaChange,
+    onRequestSessions,
+    onNewSession,
+    onExit,
+  });
 
   const handleQuestionSelect = useCallback((item) => {
     setShowQuestions(false);
@@ -129,6 +156,8 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
     'Home/End: oldest or live tail',
     'Ctrl+Q: history',
     '/mode, /model, /build',
+    '/new, /switch, /sessions',
+    '/rename <title>, /delete <id>',
     '/git <msg>, undo',
   ];
   const activeToolEntryId = useMemo(() => (
@@ -448,6 +477,9 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
           )}
         </Box>
         <Box flexDirection="row">
+          <Text color={COLORS.dim}>{`* ${truncate(currentSessionTitle || sessionTitle || sessionId || 'New Session', 28)}   `}</Text>
+          <Text color={COLORS.orange}>|</Text>
+          <Text color={COLORS.dim}>{'   '}</Text>
           <Text color={COLORS.orange}>{modeIcon}</Text>
           <Text color={COLORS.dim}>{` ${mode?.label || 'Mode'}   `}</Text>
           <Text color={COLORS.orange}>|</Text>
