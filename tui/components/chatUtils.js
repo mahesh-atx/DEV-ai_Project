@@ -198,6 +198,8 @@ export function getToolDisplayName(toolName) {
   if (toolName === 'search_files') return 'Search';
   if (toolName === 'search_content') return 'Grep';
   if (toolName === 'ask_user') return 'Ask';
+  if (toolName === 'todowrite') return 'Update Todos';
+  if (toolName === 'todoread') return 'Read Todos';
   if (toolName === 'finish_task') return 'Task';
   if (toolName === 'plan_exit') return 'Plan';
   return 'Task';
@@ -242,6 +244,10 @@ export function getToolPhaseLabel(toolName) {
     case 'delegate_task':
     case 'task':
       return 'Delegating work';
+    case 'todowrite':
+      return 'Updating todos';
+    case 'todoread':
+      return 'Reading todos';
     case 'batch':
       return 'Running tool batch';
     case 'finish_task':
@@ -264,7 +270,6 @@ export function shouldInlineToolDetails(toolName) {
     case 'grep':
     case 'search_content':
     case 'webfetch':
-    case 'todoread':
     case 'lsp':
       return true;
     default:
@@ -340,6 +345,9 @@ export function formatToolArgs(toolName, rawArgs, argsObject) {
       return pick(parsed.query, rawArgs);
     case 'webfetch':
       return pick(parsed.url, rawArgs);
+    case 'todowrite':
+    case 'todoread':
+      return '';
     case 'question':
     case 'ask_user':
       return 'Clarification';
@@ -436,6 +444,136 @@ export function wrapText(text, maxWidth) {
     }
   }
   return wrapped;
+}
+
+export function stripThinkBlocks(text) {
+  let value = String(text || '');
+
+  while (true) {
+    const startMatch = value.match(/<think>/i);
+    if (!startMatch) break;
+
+    const startIndex = startMatch.index ?? -1;
+    if (startIndex < 0) break;
+
+    const remainder = value.slice(startIndex);
+    const endMatch = remainder.match(/<\/think>/i);
+    if (!endMatch) {
+      value = value.slice(0, startIndex);
+      break;
+    }
+
+    const endIndex = startIndex + (endMatch.index ?? 0) + endMatch[0].length;
+    value = `${value.slice(0, startIndex)}${value.slice(endIndex)}`;
+  }
+
+  return value.replace(/<\/?think>/gi, '');
+}
+
+export function stripInlineMarkdown(text) {
+  return String(text || '')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/_([^_\n]+)_/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1');
+}
+
+export function sanitizeDisplayText(text) {
+  return stripSystemAndEnv(stripThinkBlocks(text))
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+}
+
+function pushWrappedSegments(linesArray, prefixSegments, text, maxWidth, color, bold = false) {
+  const prefixWidth = prefixSegments.reduce((total, segment) => total + getCharWidth(segment.text || ''), 0);
+  const bodyWidth = Math.max(8, maxWidth - prefixWidth);
+  const wrappedText = wrapText(text, bodyWidth);
+  const continuationSegments = prefixWidth > 0 ? [{ text: ' '.repeat(prefixWidth) }] : [];
+
+  if (wrappedText.length === 0) {
+    linesArray.push({ segments: [...prefixSegments] });
+    return;
+  }
+
+  wrappedText.forEach((line, index) => {
+    const segments = index === 0 ? [...prefixSegments] : [...continuationSegments];
+    segments.push({ text: line, color, bold });
+    linesArray.push({ segments });
+  });
+}
+
+export function buildFormattedLines(text, maxWidth, options = {}) {
+  const {
+    defaultColor = COLORS.white,
+    headingColor = COLORS.orange,
+    subheadingColor = COLORS.blue,
+    bulletColor = COLORS.orange,
+    quoteColor = COLORS.dim,
+    codeColor = COLORS.code,
+  } = options;
+
+  const value = sanitizeDisplayText(text);
+  if (!value) return [];
+
+  const lines = [];
+  let inCodeBlock = false;
+
+  value.split('\n').forEach((rawLine) => {
+    const trimmed = rawLine.trim();
+
+    if (!trimmed) {
+      lines.push({ segments: [], empty: true });
+      return;
+    }
+
+    if (trimmed.startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      return;
+    }
+
+    if (inCodeBlock) {
+      pushWrappedSegments(lines, [], rawLine, maxWidth, codeColor);
+      return;
+    }
+
+    if (/^#{1,3}\s+/.test(trimmed)) {
+      const headingText = stripInlineMarkdown(trimmed.replace(/^#{1,3}\s+/, ''));
+      const headingLevel = (trimmed.match(/^#+/)?.[0] || '').length;
+      pushWrappedSegments(lines, [], headingText, maxWidth, headingLevel === 1 ? headingColor : subheadingColor, true);
+      return;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const itemText = stripInlineMarkdown(trimmed.replace(/^[-*]\s+/, ''));
+      pushWrappedSegments(lines, [{ text: '- ', color: bulletColor }], itemText, maxWidth, defaultColor);
+      return;
+    }
+
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const [, marker, itemText = ''] = trimmed.match(/^(\d+\.)\s+(.*)$/) || [];
+      pushWrappedSegments(lines, [{ text: `${marker} `, color: bulletColor }], stripInlineMarkdown(itemText), maxWidth, defaultColor);
+      return;
+    }
+
+    if (/^>\s+/.test(trimmed)) {
+      const quoteText = stripInlineMarkdown(trimmed.replace(/^>\s+/, ''));
+      pushWrappedSegments(lines, [{ text: '| ', color: quoteColor }], quoteText, maxWidth, quoteColor);
+      return;
+    }
+
+    pushWrappedSegments(lines, [], stripInlineMarkdown(rawLine), maxWidth, defaultColor);
+  });
+
+  while (lines.length > 0 && lines[lines.length - 1]?.empty) {
+    lines.pop();
+  }
+
+  return lines;
 }
 
 export function mergeSummary(previous, next) {

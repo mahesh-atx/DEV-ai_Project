@@ -35,6 +35,70 @@ export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {
             linesArray.push(line);
         }
     };
+    const renderTodoItems = (todoItems = []) => {
+        if (!Array.isArray(todoItems) || todoItems.length === 0) {
+            pushEntryLine({
+                segments: [
+                    { text: '  └ ', color: COLORS.dim },
+                    { text: 'No todos yet', color: COLORS.dim }
+                ]
+            });
+            return;
+        }
+
+        todoItems.forEach((todo, index) => {
+            const prefix = index === 0 ? '  └ ' : '    ';
+            const marker = todo.status === 'completed' || todo.status === 'cancelled' ? '☒' : '□';
+            const markerColor = todo.status === 'completed'
+                ? COLORS.green
+                : todo.status === 'cancelled'
+                    ? COLORS.dim
+                    : todo.status === 'in_progress'
+                        ? COLORS.blue
+                        : COLORS.white;
+            const textColor = todo.status === 'completed'
+                ? COLORS.green
+                : todo.status === 'cancelled'
+                    ? COLORS.dim
+                    : todo.status === 'in_progress'
+                        ? '#C4B5FD'
+                        : COLORS.white;
+            const backgroundColor = todo.status === 'in_progress' ? '#1E1B4B' : undefined;
+            const isStruck = todo.status === 'completed' || todo.status === 'cancelled';
+            const wrappedLines = wrapText(todo.content, Math.max(12, maxW - 8));
+
+            wrappedLines.forEach((lineText, lineIndex) => {
+                if (lineIndex === 0) {
+                    pushEntryLine({
+                        segments: [
+                            { text: prefix, color: COLORS.dim },
+                            { text: `${marker} `, color: markerColor },
+                            {
+                                text: lineText,
+                                color: textColor,
+                                backgroundColor,
+                                bold: todo.status === 'in_progress',
+                                strikethrough: isStruck
+                            }
+                        ]
+                    });
+                } else {
+                    pushEntryLine({
+                        segments: [
+                            { text: '      ', color: COLORS.dim },
+                            {
+                                text: lineText,
+                                color: textColor,
+                                backgroundColor,
+                                bold: todo.status === 'in_progress',
+                                strikethrough: isStruck
+                            }
+                        ]
+                    });
+                }
+            });
+        });
+    };
 
     if (entry.metadata?.isCollapsible && !entry.metadata?.inlineDetails && !isExpanded) {
         hintText = { text: ' (ctrl+r / alt+r / /expand)', color: COLORS.dim };
@@ -96,6 +160,8 @@ export function renderActivityEntry(entry, linesArray, maxW, liveRenderState = {
                 { text: el, color: COLORS.dim }
             ]});
         });
+    } else if (entry.metadata?.todoItems) {
+        renderTodoItems(entry.metadata.todoItems);
     } else if (entry.metadata?.isCollapsible && isExpanded && entry.metadata.fullText) {
         wrapText(entry.metadata.fullText, maxW - 4).forEach(el => {
             pushEntryLine({ segments: [

@@ -3,85 +3,103 @@ import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import SelectInput from 'ink-select-input';
 import { THEME } from '../constants.js';
-import { getApiKey, setApiKey, clearApiKey } from '../../utils/configManager.js';
-
-const MASKED_PREFIX = 'nvapi-';
-const MASKED_VISIBLE_CHARS = 4;
+import { getStoredApiKey, setStoredApiKey, clearStoredApiKey } from '../../utils/configManager.js';
+import { getProvider, validateApiKey } from '../../config/models.js';
 
 function maskKey(key) {
   if (!key) return '(not set)';
-  if (key.startsWith(MASKED_PREFIX) && key.length > MASKED_PREFIX.length + MASKED_VISIBLE_CHARS) {
-    return MASKED_PREFIX + '****' + key.slice(-MASKED_VISIBLE_CHARS);
-  }
-  return key.slice(0, 6) + '****' + key.slice(-4);
+  if (key.length <= 10) return `${key.slice(0, 3)}****`;
+  return `${key.slice(0, 6)}****${key.slice(-4)}`;
 }
 
 const SettingsScreen = ({ onBack }) => {
   const [screen, setScreen] = useState('menu');
+  const [targetProviderKey, setTargetProviderKey] = useState('nvidia');
   const [newKey, setNewKey] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  const currentKey = getApiKey();
-  const envKey = process.env.NVIDIA_API_KEY;
-  const keySource = envKey ? (currentKey ? 'both (.env + stored)' : '.env file') : (currentKey ? 'stored config' : 'none');
+  const nvidia = getProvider('nvidia');
+  const openrouter = getProvider('openrouter');
 
   const menuItems = [
-    { label: 'Change API Key', value: 'change' },
-    { label: 'Clear Stored API Key', value: 'clear' },
+    { label: 'Change NVIDIA Build API Key', value: 'change:nvidia' },
+    { label: 'Clear Stored NVIDIA Build API Key', value: 'clear:nvidia' },
+    { label: 'Change OpenRouter API Key', value: 'change:openrouter' },
+    { label: 'Clear Stored OpenRouter API Key', value: 'clear:openrouter' },
     { label: 'Back to Main Menu', value: 'back' },
   ];
+
+  const getProviderState = (provider) => {
+    const storedKey = getStoredApiKey(provider.envKey);
+    const envKey = process.env[provider.envKey];
+    const source = envKey
+      ? (storedKey ? 'both (.env + stored)' : '.env file')
+      : (storedKey ? 'stored config' : 'none');
+
+    return {
+      storedKey,
+      envKey,
+      source,
+    };
+  };
 
   const handleMenuSelect = (item) => {
     if (item.value === 'back') {
       onBack();
-    } else if (item.value === 'change') {
+      return;
+    }
+
+    const [action, providerKey] = item.value.split(':');
+    if (action === 'change') {
+      setTargetProviderKey(providerKey);
       setNewKey('');
       setError('');
       setMessage('');
       setScreen('change');
-    } else if (item.value === 'clear') {
-      clearApiKey();
-      setMessage('Stored API key cleared.');
+      return;
+    }
+
+    if (action === 'clear') {
+      const provider = getProvider(providerKey);
+      clearStoredApiKey(provider.envKey);
+      setMessage(`${provider.name} stored API key cleared.`);
       setScreen('menu');
     }
   };
 
   const handleKeySubmit = (value) => {
     const trimmed = value.trim();
-    if (!trimmed) {
-      setError('API key cannot be empty.');
+    const provider = getProvider(targetProviderKey);
+    const validationError = validateApiKey(provider.key, trimmed);
+    if (validationError) {
+      setError(validationError);
       return;
     }
-    if (!trimmed.startsWith('nvapi-')) {
-      setError('Key must start with "nvapi-".');
-      return;
-    }
-    if (trimmed.length < 20) {
-      setError('Key seems too short. Please check and try again.');
-      return;
-    }
-    setApiKey(trimmed);
-    setMessage('API key updated successfully.');
+    setStoredApiKey(provider.envKey, trimmed);
+    setMessage(`${provider.name} API key updated successfully.`);
     setScreen('menu');
   };
 
   if (screen === 'change') {
+    const provider = getProvider(targetProviderKey);
+    const providerState = getProviderState(provider);
+
     return (
       <Box flexDirection="column" padding={2} width="100%" alignItems="center">
         <Box padding={2} borderStyle="round" borderColor={THEME.border} flexDirection="column" width={72}>
-        <Text color={THEME.accent} bold>Change API Key</Text>
+        <Text color={THEME.accent} bold>Change {provider.name} API Key</Text>
         <Box marginTop={1} flexDirection="column">
-          <Text color={THEME.dim}>Current: {maskKey(currentKey || envKey)}</Text>
+          <Text color={THEME.dim}>Current: {maskKey(providerState.storedKey || providerState.envKey)}</Text>
         </Box>
         <Box marginTop={1} flexDirection="column">
-          <Text color={THEME.text}>Enter new NVIDIA API key:</Text>
+          <Text color={THEME.text}>Enter new {provider.name} API key:</Text>
           <Box marginTop={1}>
             <TextInput
               value={newKey}
               onChange={(val) => { setNewKey(val); setError(''); }}
               onSubmit={handleKeySubmit}
-              placeholder="nvapi-xxxxxxxxxxxxxxxxxxxx"
+              placeholder={provider.placeholder}
               focus
               showCursor
             />
@@ -101,14 +119,19 @@ const SettingsScreen = ({ onBack }) => {
     );
   }
 
+  const nvidiaState = getProviderState(nvidia);
+  const openrouterState = getProviderState(openrouter);
+
   return (
     <Box flexDirection="column" padding={2} width="100%" alignItems="center">
       <Box padding={2} borderStyle="round" borderColor={THEME.border} flexDirection="column" width={72}>
       <Text color={THEME.accent} bold>Global Settings</Text>
       <Box marginTop={1} marginBottom={1} flexDirection="column">
-        <Text color={THEME.text}>API Key: {maskKey(currentKey || envKey)}</Text>
-        <Text color={THEME.dim}>Source: {keySource}</Text>
-        <Text color={THEME.dim}>Config: ~/.config/devai/config.json</Text>
+        <Text color={THEME.text}>NVIDIA Build: {maskKey(nvidiaState.storedKey || nvidiaState.envKey)}</Text>
+        <Text color={THEME.dim}>Source: {nvidiaState.source}</Text>
+        <Text color={THEME.text}>OpenRouter: {maskKey(openrouterState.storedKey || openrouterState.envKey)}</Text>
+        <Text color={THEME.dim}>Source: {openrouterState.source}</Text>
+        <Text color={THEME.dim}>Config: ~/.config/rootx/config.json</Text>
       </Box>
       {message ? (
         <Box marginBottom={1}>

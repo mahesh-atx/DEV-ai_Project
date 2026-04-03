@@ -16,7 +16,7 @@ const BINARY_EXTS = new Set([
   ".lock"
 ]);
 
-const SKIP_NAMES = new Set(["node_modules", ".git", ".devai_memory.json", "_devai_last_response.txt"]);
+const SKIP_NAMES = new Set(["node_modules", ".git", ".rootx_memory.json", "_rootx_last_response.txt"]);
 const CONFIG_FILES = new Set(["package.json", ".env", ".env.example", "tsconfig.json", "vite.config.js", "webpack.config.js"]);
 
 export function detectProjectType(dir) {

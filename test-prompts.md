@@ -1,17 +1,17 @@
-# DevAI Tool Test Prompts
+# RootX Tool Test Prompts
 
 Run each prompt sequentially. Do NOT make any code changes to existing files. Only create temporary test files in a `test-output/` directory. Clean them up at the end. and also if the prompt fails skip it and move to the next prompt 
 
 ---
 
 ## 1. write_file
-Create a file called `test-output/hello.txt` with the content "Hello DevAI Test!"
+Create a file called `test-output/hello.txt` with the content "Hello RootX Test!"
 
 ## 2. read_file
 Read the contents of `test-output/hello.txt` and confirm what it says.
 
 ## 3. edit_file
-In `test-output/hello.txt`, replace "Hello DevAI Test!" with "Hello DevAI - Edited!"
+In `test-output/hello.txt`, replace "Hello RootX Test!" with "Hello RootX - Edited!"
 
 ## 4. list_files
 List all files in the current directory.

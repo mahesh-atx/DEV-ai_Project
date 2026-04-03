@@ -8,14 +8,59 @@ import SettingsScreen from './components/SettingsScreen.jsx';
 import SetupScreen from './components/SetupScreen.jsx';
 import { MODES } from './constants.js';
 import { listModels, getModel } from '../config/models.js';
-import { hasApiKey } from '../utils/configManager.js';
+import { hasAnyApiKey } from '../utils/configManager.js';
+
+const DEFAULT_MODEL_KEY = 'kimi';
+
+function resolveConfiguredModelKey(preferredProvider = null) {
+  const models = listModels();
+  const ordered = preferredProvider
+    ? [...models].sort((left, right) => {
+        if (left.provider === preferredProvider && right.provider !== preferredProvider) return -1;
+        if (right.provider === preferredProvider && left.provider !== preferredProvider) return 1;
+        if (left.key === DEFAULT_MODEL_KEY) return -1;
+        if (right.key === DEFAULT_MODEL_KEY) return 1;
+        return 0;
+      })
+    : models;
+
+  for (const entry of ordered) {
+    try {
+      getModel(entry.key);
+      return entry.key;
+    } catch {
+      // Continue until we find a configured model.
+    }
+  }
+
+  return DEFAULT_MODEL_KEY;
+}
+
+function getModelDisplay(key) {
+  const entry = listModels().find((model) => model.key === key);
+  return entry
+    ? { label: entry.name, id: entry.id, provider: entry.provider, providerName: entry.providerName }
+    : { label: 'Unknown Model', id: '', provider: '', providerName: '' };
+}
 
 const App = () => {
-  const [view, setView] = useState(hasApiKey() ? 'welcome' : 'setup');
+  const initialModelKey = resolveConfiguredModelKey();
+  const initialModelConfig = hasAnyApiKey()
+    ? (() => {
+        try {
+          return { ...getModel(initialModelKey), key: initialModelKey };
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
+  const [view, setView] = useState(hasAnyApiKey() ? 'welcome' : 'setup');
   const [mode, setMode] = useState(MODES[0]);
-  const [modelKey, setModelKey] = useState('kimi');
-  const [modelConfig, setModelConfig] = useState(null);
-  const [modelDisplay, setModelDisplay] = useState({ label: 'Moonshot Kimi-k2.5' });
+  const [modelKey, setModelKey] = useState(initialModelKey);
+  const [modelConfig, setModelConfig] = useState(initialModelConfig);
+  const [modelDisplay, setModelDisplay] = useState(getModelDisplay(initialModelKey));
+  const [setupTargetModelKey, setSetupTargetModelKey] = useState(null);
 
   const resolveModel = (key) => {
     try {
@@ -26,19 +71,32 @@ const App = () => {
     }
   };
 
+  const openSetup = (targetModelKey = null) => {
+    setSetupTargetModelKey(targetModelKey);
+    setView('setup');
+  };
+
+  const applyModelSelection = (selectedKey, selectedName) => {
+    const config = resolveModel(selectedKey);
+    if (!config) {
+      openSetup(selectedKey);
+      return false;
+    }
+
+    setModelKey(selectedKey);
+    setModelDisplay(getModelDisplay(selectedKey));
+    setModelConfig(config);
+    return true;
+  };
+
   const handleModelSelect = (selected) => {
-    setModelKey(selected.key);
-    setModelDisplay({ label: selected.name });
-    const config = resolveModel(selected.key);
-    if (config) setModelConfig(config);
-    setView('welcome');
+    if (applyModelSelection(selected.key, selected.name)) {
+      setView('welcome');
+    }
   };
 
   const handleModelChangeInChat = (selected) => {
-    setModelKey(selected.key);
-    setModelDisplay({ label: selected.name });
-    const config = resolveModel(selected.key);
-    if (config) setModelConfig(config);
+    applyModelSelection(selected.key, selected.name);
   };
 
   const handleModeChangeInChat = (selectedMode) => {
@@ -48,8 +106,11 @@ const App = () => {
   const currentModel = modelConfig || {
     key: modelKey,
     name: modelDisplay.label,
-    id: 'moonshotai/kimi-k2.5',
-    apiKey: process.env.NVIDIA_API_KEY || '',
+    id: modelDisplay.id || '',
+    provider: modelDisplay.provider || '',
+    providerName: modelDisplay.providerName || '',
+    apiKey: '',
+    baseURL: '',
     temperature: 1.0,
     topP: 1.0,
     maxTokens: 16384,
@@ -60,9 +121,16 @@ const App = () => {
     <Box>
       {view === 'setup' && (
         <SetupScreen
-          onComplete={() => {
-            const config = resolveModel(modelKey);
-            if (config) setModelConfig(config);
+          modelKey={setupTargetModelKey}
+          onComplete={(providerKey) => {
+            const nextModelKey = setupTargetModelKey || resolveConfiguredModelKey(providerKey);
+            const config = resolveModel(nextModelKey);
+            if (config) {
+              setModelKey(nextModelKey);
+              setModelDisplay(getModelDisplay(nextModelKey));
+              setModelConfig(config);
+            }
+            setSetupTargetModelKey(null);
             setView('welcome');
           }}
         />
@@ -77,8 +145,12 @@ const App = () => {
             else if (v === 'models') setView('modelSelect');
             else if (v === 'chat') {
               const config = resolveModel(modelKey);
-              if (config) setModelConfig(config);
-              setView('chat');
+              if (config) {
+                setModelConfig(config);
+                setView('chat');
+              } else {
+                openSetup(modelKey);
+              }
             }
             else setView(v);
           }}

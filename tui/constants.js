@@ -9,17 +9,16 @@ export const THEME = {
 };
 
 export const LOGO = `
- ██████╗ ███████╗██╗   ██╗ █████╗ ██╗
- ██╔══██╗██╔════╝██║   ██║██╔══██╗██║
- ██║  ██║█████╗  ██║   ██║███████║██║
- ██║  ██║██╔══╝  ╚██╗ ██╔╝██╔══██║██║
- ██████╔╝███████╗ ╚████╔╝ ██║  ██║██║
- ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝  ╚═╝╚═╝
+ ██████╗  ██████╗  ██████╗ ████████╗██╗  ██╗
+ ██╔══██╗██╔═══██╗██╔═══██╗╚══██╔══╝╚██╗██╔╝
+ ██████╔╝██║   ██║██║   ██║   ██║    ╚███╔╝ 
+ ██╔══██╗██║   ██║██║   ██║   ██║    ██╔██╗ 
+ ██║  ██║╚██████╔╝╚██████╔╝   ██║   ██╔╝ ██╗
+ ╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚═╝  ╚═╝
 `;
 
 export const MODES = [
-  { value: 'standard', label: 'Standard', desc: 'Single pass generation and apply flow' },
-  { value: 'agent', label: 'Agent', desc: 'Builder to debug pipeline' },
+  { value: 'agent', label: 'Agent', desc: 'Reads, writes, edits, and runs commands' },
   { value: 'polish', label: 'Polish', desc: 'Pipeline plus refinement pass' },
   { value: 'orchestrator', label: 'Orchestrator', desc: 'Parallel multi-agent execution pipeline' },
   { value: 'planner', label: 'Planner', desc: 'Read-only exploration and plan creation' },

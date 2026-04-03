@@ -1,15 +1,16 @@
 {
-  "name": "devai-cli-coder",
-  "version": "1.0.2",
+  "name": "rootx-cli",
+  "version": "2.0.0",
   "type": "module",
-  "description": "DevAI - Autonomous AI coding assistant",
+  "description": "RootX - Autonomous AI coding assistant",
   "bin": {
-    "devai": "./bin/devai.js"
+    "rootx": "./bin/rootx.js",
+    "rx": "./bin/rootx-test.js"
   },
   "scripts": {
-    "devai": "node bin/devai.js",
-    "devai:bin": "node bin/devai-test.js",
-    "devai:direct": "npx tsx tui-main.jsx"
+    "rootx": "node bin/rootx.js",
+    "rootx:bin": "node bin/rootx-test.js",
+    "rootx:direct": "npx tsx tui-main.jsx"
   },
   "dependencies": {
     "boxen": "^8.0.1",

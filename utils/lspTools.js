@@ -8,8 +8,8 @@ const DEFAULT_SKIP_NAMES = new Set([
   "build",
   ".next",
   ".cache",
-  ".devai_memory.json",
-  "_devai_last_response.txt",
+  ".rootx_memory.json",
+  "_rootx_last_response.txt",
 ]);
 
 const CODE_EXTENSIONS = new Set([

@@ -10,10 +10,43 @@ import {
   SPINNER_FRAMES,
   truncate,
   wrapText,
+  buildFormattedLines,
   ensureSpacer,
   findLatestLiveToolEntryId,
   findLatestVisibleCollapsibleId,
 } from './chatUtils.js';
+
+const buildQuestionBodyLines = (questionText, maxWidth) => {
+  const lines = [];
+
+  String(questionText || '').replace(/\r\n/g, '\n').split('\n').forEach((rawLine) => {
+    const trimmed = rawLine.trim();
+
+    if (!trimmed) {
+      lines.push({ segments: [], empty: true });
+      return;
+    }
+
+    if (/^Command:\s*/i.test(trimmed)) {
+      const commandText = trimmed.replace(/^Command:\s*/i, '').trim();
+      lines.push({ segments: [{ text: 'Command', color: COLORS.dim, bold: true }] });
+      wrapText(commandText, maxWidth).forEach((line) => {
+        lines.push({ segments: [{ text: line, color: COLORS.white, bold: true }] });
+      });
+      return;
+    }
+
+    wrapText(rawLine, maxWidth).forEach((line) => {
+      lines.push({ segments: [{ text: line, color: COLORS.dim }] });
+    });
+  });
+
+  while (lines.length > 0 && lines[lines.length - 1]?.empty) {
+    lines.pop();
+  }
+
+  return lines;
+};
 
 const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], onModeChange, onModelChange, onExit }) => {
   const {
@@ -114,7 +147,14 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
       : spinnerFrame;
 
   const maxLineWidth = Math.max(20, dims.columns - 4);
+  const questionPanelWidth = Math.max(36, Math.min(dims.columns - 4, 96));
+  const questionBodyWidth = Math.max(20, questionPanelWidth - 6);
   const previousLineCountRef = useRef(0);
+  const pendingQuestionLines = useMemo(() => {
+    if (!pendingQuestion) return [];
+    const questionText = typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question;
+    return buildQuestionBodyLines(questionText, questionBodyWidth);
+  }, [pendingQuestion, questionBodyWidth]);
   const allLines = useMemo(() => {
     let lines = [];
 
@@ -148,9 +188,9 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
         if (msg.planFollowup && msg.planFollowup !== 'none') {
           const planContent = msg.text.replace(/^## Plan: .*\n\n/, '').replace(/\n\n---\n\n[\s\S]*$/, '').trim();
           lines.push({ segments: [{ text: 'PLAN COMPLETE', color: COLORS.orange, bold: true }] });
-          addTextWrapped(planContent, COLORS.white);
+          buildFormattedLines(planContent, maxLineWidth).forEach((line) => lines.push(line));
           if (msg.planFollowup === 'implement') lines.push({ segments: [{ text: '-> Implementing in this session...', color: COLORS.green }] });
-          else if (msg.planFollowup === 'new_session') lines.push({ segments: [{ text: '* Plan saved for next session.', color: COLORS.dim }] });
+          else if (msg.planFollowup === 'new_session') lines.push({ segments: [{ text: 'Plan saved for next session.', color: COLORS.dim }] });
           lines.push({ segments: [], empty: true });
         } else if (msg.text) {
           let isDuplicate = false;
@@ -159,21 +199,7 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
             if (lastChat && lastChat.text === msg.text) isDuplicate = true;
           }
           if (!isDuplicate && msg.text !== 'Agent completed.') {
-            let inCodeBlock = false;
-            const wrappedLines = [];
-
-            wrapText(msg.text, maxLineWidth - 2).forEach((line) => {
-              if (line.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
-              wrappedLines.push({ text: line, color: inCodeBlock ? COLORS.code : COLORS.white });
-            });
-
-            wrappedLines.forEach((wrappedLine, index) => {
-              if (index === 0) {
-                lines.push({ segments: [{ text: '* ', color: COLORS.white }, { text: wrappedLine.text, color: wrappedLine.color }] });
-              } else {
-                lines.push({ segments: [{ text: '  ' }, { text: wrappedLine.text, color: wrappedLine.color }] });
-              }
-            });
+            buildFormattedLines(msg.text, maxLineWidth).forEach((line) => lines.push(line));
             lines.push({ segments: [], empty: true });
           }
         }
@@ -185,22 +211,9 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
 
       if (streamResponseContent) {
         lines.push({ segments: [], empty: true });
-        let inCodeBlock = false;
-        const wrappedLines = [];
-
-        wrapText(streamResponseContent, maxLineWidth - 2).forEach((line) => {
-          if (line.trim().startsWith('```')) inCodeBlock = !inCodeBlock;
-          wrappedLines.push({ text: line, color: inCodeBlock ? COLORS.code : COLORS.white });
-        });
-
-        wrappedLines.forEach((wrappedLine, index) => {
-          if (index === 0) {
-            lines.push({ segments: [{ text: '* ', color: COLORS.white }, { text: wrappedLine.text, color: wrappedLine.color }] });
-          } else {
-            lines.push({ segments: [{ text: '  ' }, { text: wrappedLine.text, color: wrappedLine.color }] });
-          }
-        });
-        if (wrappedLines.length > 0 && lines.length > 0) {
+        const formattedLines = buildFormattedLines(streamResponseContent, maxLineWidth);
+        formattedLines.forEach((line) => lines.push(line));
+        if (formattedLines.length > 0 && lines.length > 0) {
           const lastStreamingLine = lines[lines.length - 1];
           if (lastStreamingLine?.segments) {
             lastStreamingLine.segments.push({ text: showStreamingCursor ? '_' : ' ', color: COLORS.dim });
@@ -228,17 +241,15 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
   if (showShortcuts) uiReservedLines += shortcuts.length + 4;
 
   if (pendingQuestion) {
-    const questionText = typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question;
-    let questionLineCount = 0;
-    questionText.split('\n').forEach((line) => {
-      questionLineCount += wrapText(line, dims.columns - 4).length;
-    });
+    let questionLineCount = pendingQuestionLines.length;
     if (pendingQuestion.options?.length > 0) {
-      questionLineCount += pendingQuestion.options.length + 2;
+      questionLineCount += pendingQuestion.options.length + 3;
+    } else {
+      questionLineCount += 1;
     }
-    uiReservedLines += 3 + questionLineCount;
+    uiReservedLines += 6 + questionLineCount;
   }
-  if (planFollowup) uiReservedLines += 5;
+  if (planFollowup) uiReservedLines += 11;
 
   const chatLinesAvailable = Math.max(5, dims.rows - uiReservedLines);
   const maxScroll = Math.max(0, allLines.length - chatLinesAvailable);
@@ -303,6 +314,7 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
                 color={seg.color}
                 backgroundColor={seg.backgroundColor}
                 bold={seg.bold}
+                strikethrough={seg.strikethrough}
               >
                 {seg.text}
               </Text>
@@ -319,34 +331,63 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
       )}
 
       {pendingQuestion && (
-        <Box flexDirection="column" borderStyle="round" borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} paddingX={1} marginX={1} marginBottom={1}>
-          <Text color={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} bold>{pendingQuestion.title || 'Action Required'}</Text>
-          <Box flexDirection="column" marginTop={1} marginBottom={0}>
-            {(typeof pendingQuestion === 'string' ? pendingQuestion : pendingQuestion.question).split('\n').map((line, index) => (
-              <Text key={index} color={COLORS.dim}>{line}</Text>
-            ))}
-            {pendingQuestion.options?.length > 0 ? (
-              <Box flexDirection="column" marginTop={1}>
-                {pendingQuestion.options.map((option, index) => (
+        <Box width="100%" justifyContent="center" marginBottom={1}>
+          <Box
+            flexDirection="column"
+            borderStyle="round"
+            borderColor={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue}
+            paddingX={2}
+            paddingY={1}
+            width={questionPanelWidth}
+          >
+            <Text color={pendingQuestion.title?.includes('Warning') ? COLORS.red : COLORS.blue} bold>{pendingQuestion.title || 'Action Required'}</Text>
+            <Box flexDirection="column" marginTop={1}>
+              {pendingQuestionLines.map((line, index) => (
+                <Box key={index} flexDirection="row">
+                  {line.empty ? <Text> </Text> : null}
+                  {line.segments?.map((seg, segmentIndex) => (
+                    <Text
+                      key={segmentIndex}
+                      color={seg.color}
+                      backgroundColor={seg.backgroundColor}
+                      bold={seg.bold}
+                      strikethrough={seg.strikethrough}
+                    >
+                      {seg.text}
+                    </Text>
+                  ))}
+                </Box>
+              ))}
+              {pendingQuestion.options?.length > 0 ? (
+                <Box flexDirection="column" marginTop={1}>
+                  {pendingQuestion.options.map((option, index) => {
+                    const isSelected = index === pendingQuestionIndex && !pendingQuestionManualEntry;
+                    return (
+                      <Text
+                        key={option}
+                        color={isSelected ? COLORS.white : COLORS.dim}
+                        backgroundColor={isSelected ? COLORS.highlight : undefined}
+                        bold={isSelected}
+                      >
+                        {isSelected ? '> ' : '  '}{option}
+                      </Text>
+                    );
+                  })}
                   <Text
-                    key={option}
-                    color={index === pendingQuestionIndex && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim}
-                    bold={index === pendingQuestionIndex && !pendingQuestionManualEntry}
+                    color={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim}
+                    backgroundColor={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.highlight : undefined}
+                    bold={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry}
                   >
-                    {index === pendingQuestionIndex && !pendingQuestionManualEntry ? '> ' : '  '}{option}
+                    {pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? '> ' : '  '}Type your answer
                   </Text>
-                ))}
-                <Text
-                  color={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? COLORS.white : COLORS.dim}
-                  bold={pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry}
-                >
-                  {pendingQuestionIndex === pendingQuestion.options.length && !pendingQuestionManualEntry ? '> ' : '  '}Type your answer
-                </Text>
-                <Text color={COLORS.dim}>
-                  {pendingQuestionManualEntry ? 'Type below and press Enter. Esc returns to choices.' : 'Use arrows and Enter'}
-                </Text>
-              </Box>
-            ) : null}
+                  <Text color={COLORS.dim}>
+                    {pendingQuestionManualEntry ? 'Type below and press Enter. Esc returns to choices.' : 'Use arrows and Enter'}
+                  </Text>
+                </Box>
+              ) : (
+                <Text color={COLORS.dim} marginTop={1}>Type below and press Enter.</Text>
+              )}
+            </Box>
           </Box>
         </Box>
       )}
@@ -409,7 +450,7 @@ const ChatScreen = ({ mode, model, availableModes = [], availableModels = [], on
         <Box flexDirection="row">
           <Text color={COLORS.orange}>{modeIcon}</Text>
           <Text color={COLORS.dim}>{` ${mode?.label || 'Mode'}   `}</Text>
-          <Text color={COLORS.orange}>*</Text>
+          <Text color={COLORS.orange}>|</Text>
           <Text color={COLORS.dim}>{` ${modelLabel}`}</Text>
         </Box>
       </Box>
