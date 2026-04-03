@@ -31,10 +31,9 @@ Done implementing a feature? Launch the autonomous Polish agent to sweep through
 
 ### 7. Multi-Model Support
 RootX isn't locked to one provider. It natively swaps between configurations for:
-- **NVIDIA API** (Powered by top models including **NVIDIA Nemotron-120B**, **Qwen3-Coder-480B**, **Moonshot Kimi-k2.5**, and **GLM-5**)
-- DeepSeek
-- Groq / Llama 3
-- GPT-OSS / Open-Weights models
+- **NVIDIA Build / NIM** (Powered by models like **NVIDIA Nemotron-120B**, **Qwen3-Coder-480B**, **Moonshot Kimi-k2.5**, and **GLM-5**)
+- **OpenRouter** (Including **Qwen 3.6 Plus Free**, **Trinity Large Preview Free**, **GLM 4.5 Air Free**, **Nemotron 3 Nano 30B Free**, **Dolphin Mistral Venice Free**, and **Hunter Alpha**)
+- Open-weights and vendor-hosted models through an OpenAI-compatible client
 
 ### 8. Surgical Patching
 Instead of overwriting 500-line files to add a single comment, RootX uses native AST-like Diff patching to explicitly search-and-replace only the specific lines that changed, drastically reducing execution time.
@@ -57,7 +56,7 @@ RootX can maintain a structured todo list for complex work and render it directl
 You can install RootX globally to use the CLI in any project directory on your machine.
 
 ```bash
-npm install -g rootx-cli-coder
+npm install -g rootx-cli
 ```
 
 *(Note: Requires Node.js v18 or newer).*
@@ -85,11 +84,11 @@ On first launch, RootX will detect that no API key is configured and walk you th
  └─────────────────────────────────────────┘
 ```
 
-The key is stored at `~/.config/rootx/config.json` and loaded automatically on future runs.
+Stored provider keys live at `~/.config/rootx/config.json` and are loaded automatically on future runs.
 
 ### API Key Configuration
 
-RootX needs an **NVIDIA API key** to connect to AI models. You have two ways to provide it:
+RootX can use both **NVIDIA Build** and **OpenRouter** keys. You can provide either or both:
 
 | Method | How |
 |--------|-----|
@@ -99,6 +98,12 @@ RootX needs an **NVIDIA API key** to connect to AI models. You have two ways to 
 > Get your free API key at [https://build.nvidia.com](https://build.nvidia.com).
 
 The `.env` key takes priority over the stored config if both exist. You can change or clear the stored key anytime via the **Settings** menu in RootX.
+
+You can also add an OpenRouter key with `OPENROUTER_API_KEY=...` in `.env` or through the Settings screen. Provider links:
+- NVIDIA Build: [https://build.nvidia.com](https://build.nvidia.com)
+- OpenRouter: [https://openrouter.ai/keys](https://openrouter.ai/keys)
+
+If both stored config and `.env` exist for the same provider, the `.env` value wins.
 
 ### In-Session Commands
 
@@ -141,7 +146,7 @@ UI behavior:
 Start the app:
 
 ```bash
-npm run devai:direct
+npm run rootx:direct
 ```
 
 Then use a prompt that should trigger multi-step tracking, for example:

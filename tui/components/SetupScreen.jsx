@@ -1,29 +1,35 @@
 import React, { useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { THEME, LOGO } from '../constants.js';
-import { setApiKey } from '../../utils/configManager.js';
+import { setStoredApiKey } from '../../utils/configManager.js';
+import { getProvider, getProviderForModel, validateApiKey } from '../../config/models.js';
 
-const SetupScreen = ({ onComplete }) => {
+const SetupScreen = ({ modelKey = null, onComplete }) => {
+  const lockedProvider = modelKey ? getProviderForModel(modelKey) : null;
+  const [providerKey, setProviderKey] = useState(lockedProvider?.key || 'nvidia');
   const [apiKey, setApiKeyInput] = useState('');
   const [error, setError] = useState('');
+  const provider = lockedProvider || getProvider(providerKey) || getProvider('nvidia');
+
+  useInput((input, key) => {
+    if (lockedProvider) return;
+    if (!key.tab) return;
+
+    setProviderKey((current) => (current === 'nvidia' ? 'openrouter' : 'nvidia'));
+    setApiKeyInput('');
+    setError('');
+  });
 
   const handleSubmit = (value) => {
     const trimmed = value.trim();
-    if (!trimmed) {
-      setError('API key cannot be empty.');
+    const validationError = validateApiKey(provider.key, trimmed);
+    if (validationError) {
+      setError(validationError);
       return;
     }
-    if (!trimmed.startsWith('nvapi-')) {
-      setError('Key must start with "nvapi-". Check https://build.nvidia.com');
-      return;
-    }
-    if (trimmed.length < 20) {
-      setError('Key seems too short. Please check and try again.');
-      return;
-    }
-    setApiKey(trimmed);
-    onComplete();
+    setStoredApiKey(provider.envKey, trimmed);
+    onComplete(provider.key);
   };
 
   return (
@@ -41,14 +47,32 @@ const SetupScreen = ({ onComplete }) => {
 
         <Box flexDirection="column" paddingX={2}>
           <Text color={THEME.warning} bold marginBottom={1}>
-            No NVIDIA API Key Found
+            No {provider.name} API Key Found
           </Text>
           <Text color={THEME.text} marginBottom={1}>
-            RootX requires an NVIDIA API key to function.
+            {modelKey
+              ? `RootX needs a ${provider.name} API key to use the selected model.`
+              : 'RootX needs an API key before you can start a session.'}
           </Text>
           <Text color={THEME.dim} marginBottom={1}>
-            Get your free key at: https://build.nvidia.com
+            Get your key at: {provider.keyUrl}
           </Text>
+
+          {!lockedProvider ? (
+            <Box marginTop={1} flexDirection="column">
+              <Text color={THEME.accent}>Provider:</Text>
+              <Box marginTop={1}>
+                <Text color={provider.key === 'nvidia' ? THEME.accent : THEME.dim} bold={provider.key === 'nvidia'}>
+                  NVIDIA Build
+                </Text>
+                <Text color={THEME.dim}>  /  </Text>
+                <Text color={provider.key === 'openrouter' ? THEME.accent : THEME.dim} bold={provider.key === 'openrouter'}>
+                  OpenRouter
+                </Text>
+              </Box>
+              <Text color={THEME.dim}>Press Tab to switch provider.</Text>
+            </Box>
+          ) : null}
 
           <Box marginTop={1} flexDirection="column">
             <Text color={THEME.accent}>Enter your API key:</Text>
@@ -60,7 +84,7 @@ const SetupScreen = ({ onComplete }) => {
                   setError('');
                 }}
                 onSubmit={handleSubmit}
-                placeholder="nvapi-xxxxxxxxxxxxxxxxxxxx"
+                placeholder={provider.placeholder}
                 focus
                 showCursor
               />
@@ -74,7 +98,7 @@ const SetupScreen = ({ onComplete }) => {
 
           <Box marginTop={2}>
             <Text color={THEME.dim}>
-              Press Enter to save. The key is stored locally at ~/.config/rootx/
+              Press Enter to save. Keys are stored locally at ~/.config/rootx/
             </Text>
           </Box>
         </Box>

@@ -4,6 +4,7 @@ import os from 'os';
 
 const CONFIG_DIR_NAME = '.config/rootx';
 const CONFIG_FILE_NAME = 'config.json';
+const KNOWN_API_ENV_KEYS = ['NVIDIA_API_KEY', 'OPENROUTER_API_KEY'];
 
 /**
  * Returns the absolute path to the global config directory.
@@ -45,52 +46,84 @@ export function saveConfig(config) {
 }
 
 /**
- * Returns the stored NVIDIA API key, or null if not set.
+ * Returns the stored API key for the given env key, or null if not set.
  */
-export function getApiKey() {
+export function getStoredApiKey(envKey) {
   const config = loadConfig();
-  return config.NVIDIA_API_KEY || null;
+  return config[envKey] || null;
 }
 
 /**
- * Stores the NVIDIA API key in the global config file
+ * Stores the API key in the global config file
  * and injects it into process.env if not already set.
  */
-export function setApiKey(key) {
+export function setStoredApiKey(envKey, key) {
   const config = loadConfig();
-  config.NVIDIA_API_KEY = key;
+  config[envKey] = key;
   saveConfig(config);
 
-  if (!process.env.NVIDIA_API_KEY) {
-    process.env.NVIDIA_API_KEY = key;
+  if (!process.env[envKey]) {
+    process.env[envKey] = key;
   }
 }
 
 /**
  * Removes the stored API key from the global config.
  */
-export function clearApiKey() {
+export function clearStoredApiKey(envKey) {
   const config = loadConfig();
-  delete config.NVIDIA_API_KEY;
+  const previousValue = config[envKey];
+  delete config[envKey];
   saveConfig(config);
+
+  if (previousValue && process.env[envKey] === previousValue) {
+    delete process.env[envKey];
+  }
 }
 
 /**
  * Returns true if an API key is available (from env or stored config).
  */
-export function hasApiKey() {
-  return !!(process.env.NVIDIA_API_KEY || getApiKey());
+export function hasApiKey(envKey) {
+  return !!(process.env[envKey] || getStoredApiKey(envKey));
 }
 
 /**
- * Injects the stored API key into process.env if it is not already set.
+ * Returns true if any known provider key is available.
+ */
+export function hasAnyApiKey() {
+  return KNOWN_API_ENV_KEYS.some((envKey) => hasApiKey(envKey));
+}
+
+/**
+ * Injects all stored API keys into process.env if they are not already set.
  * Call this once at application startup.
  */
-export function injectApiKeyToEnv() {
-  if (!process.env.NVIDIA_API_KEY) {
-    const key = getApiKey();
+export function injectApiKeysToEnv() {
+  for (const envKey of KNOWN_API_ENV_KEYS) {
+    if (process.env[envKey]) continue;
+    const key = getStoredApiKey(envKey);
     if (key) {
-      process.env.NVIDIA_API_KEY = key;
+      process.env[envKey] = key;
     }
   }
+}
+
+/**
+ * Backwards-compatible NVIDIA helpers used by older code paths.
+ */
+export function getApiKey() {
+  return getStoredApiKey('NVIDIA_API_KEY');
+}
+
+export function setApiKey(key) {
+  setStoredApiKey('NVIDIA_API_KEY', key);
+}
+
+export function clearApiKey() {
+  clearStoredApiKey('NVIDIA_API_KEY');
+}
+
+export function injectApiKeyToEnv() {
+  injectApiKeysToEnv();
 }

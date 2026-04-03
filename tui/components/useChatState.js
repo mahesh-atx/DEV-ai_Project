@@ -88,13 +88,13 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
   const activeToolPhaseRef = useRef('');
   const activeRunTokenRef = useRef(0);
 
-  if (!clientRef.current) {
+  useEffect(() => {
     try {
-      clientRef.current = createClient(model.apiKey);
+      clientRef.current = createClient(model);
     } catch (error) {
       clientRef.current = null;
     }
-  }
+  }, [model]);
 
   useEffect(() => {
     const handleResize = () => setDims({ rows: stdout.rows, columns: stdout.columns });
@@ -712,7 +712,9 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
 
   const runAskMode = useCallback(async (query, msgHistory) => {
     const client = clientRef.current;
-    if (!client) return { type: 'system', text: 'API client is not configured.', id: nextId() };
+    if (!client) {
+      return { type: 'system', text: 'API Error: Configure the selected model provider key before starting a session.', id: nextId() };
+    }
 
     abortControllerRef.current = new AbortController();
     const chatMessages = [
@@ -750,7 +752,9 @@ export function useChatState({ mode, model, availableModes = MODES, availableMod
 
   const runAgentMode = useCallback(async (query, msgHistory, activeMode, reporter) => {
     const client = clientRef.current;
-    if (!client) return { type: 'system', text: 'API client is not configured.', id: nextId() };
+    if (!client) {
+      return { type: 'system', text: 'API Error: Configure the selected model provider key before starting a session.', id: nextId() };
+    }
 
     const [
       { default: runAgentPipeline }, { buildSmartContext }, { patchFile },
